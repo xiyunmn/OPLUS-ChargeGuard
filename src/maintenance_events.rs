@@ -1001,6 +1001,23 @@ mod tests {
             sensor_type: None,
         }
     }
+    fn wait_service_change(listener: &mut ControlEvents, h: &Hardware) -> Changes {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut result = Changes::default();
+        loop {
+            let next = listener.drain(h);
+            result.ids.extend(next.ids);
+            result.health |= next.health;
+            if result.ids.contains_key("thermal-engine") {
+                return result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "service notification did not arrive"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     #[test]
     fn service_pipe_eof_removes_capability_and_schedules_reconnect() {
         let h = Hardware::fixture(std::env::temp_dir().join("unused-cg-listener-root"));
@@ -1017,10 +1034,13 @@ mod tests {
             .unwrap();
         listener.output = Some(ChildStdout::from(input));
         output.write_all(b"CGS1 ready thermal-engine\n").unwrap();
-        assert!(listener.drain(&h).ids.contains_key("thermal-engine"));
+        assert!(wait_service_change(&mut listener, &h)
+            .ids
+            .contains_key("thermal-engine"));
         assert!(listener.supports(&h, &service()));
         drop(output);
-        let lost = listener.drain(&h);
+        // Readiness may be deferred during parallel child startup or signal delivery.
+        let lost = wait_service_change(&mut listener, &h);
         assert!(lost.health && lost.ids.contains_key("thermal-engine"));
         assert!(!listener.supports(&h, &service()));
         assert_eq!(
