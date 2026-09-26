@@ -905,6 +905,21 @@ pub fn ui_status(h: &Hardware) -> Result<Value> {
     view["device_info"] = device_info(h);
     Ok(view)
 }
+/// One initial payload avoids painting the overview before its readings arrive.
+/// Later refreshes keep using the lightweight ui-status endpoint.
+pub fn ui_initial(h: &Hardware) -> Result<Value> {
+    match status_view(h, true) {
+        Ok(mut view) => {
+            view["device_info"] = device_info(h);
+            Ok(view)
+        }
+        Err(error) => {
+            let mut view = ui_status(h)?;
+            view["thermal_error"] = json!(error);
+            Ok(view)
+        }
+    }
+}
 fn status_view(h: &Hardware, thermal_readings: bool) -> Result<Value> {
     let mut snapshot: Option<Value> =
         storage::load::<Value>(&h.state().join("status.json"), 2_097_152)
@@ -1156,6 +1171,7 @@ pub fn execute(args: &[String]) -> Result<Value> {
         "configure-hex" => configure(&h, args.get(1).ok_or("missing_configuration")?),
         "status" => status(&h),
         "ui-status" => ui_status(&h),
+        "ui-initial" => ui_initial(&h),
         "diagnose" => diagnose(&h),
         "device-info" => Ok(device_info(&h)),
         "logs" => logs(&h),

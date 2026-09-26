@@ -7,8 +7,9 @@
 <meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>OPLUS 充电温控</title>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="style.css">
-<script src="theme.js"></script><script src="bridge.js" defer></script><script src="app.js" defer></script>
+<script src="bridge.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -142,7 +143,7 @@
 <section id="page-preferences" role="tabpanel" aria-labelledby="tab-preferences" hidden>
   <div class="card preferences-card">
     <div class="setting-row preference-choice"><div><h2>外观</h2><p class="hint" id="theme-hint">跟随系统</p></div><div class="segmented" role="group" aria-label="主题"><label><input type="radio" name="theme" value="light"><span>浅色</span></label><label><input type="radio" name="theme" value="dark"><span>深色</span></label><label><input type="radio" name="theme" value="system" checked><span>系统</span></label></div></div>
-    <div class="setting-row"><div><h2 id="dpi-label">界面 DPI</h2><p class="hint">仅缩放 WebUI · 即时保存</p></div><div class="dpi-controls" role="group" aria-labelledby="dpi-label"><button type="button" id="dpi-decrease" class="icon-button" aria-label="缩小界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="dpi-value" aria-live="polite">105%</output><button type="button" id="dpi-increase" class="icon-button" aria-label="放大界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button><button type="button" id="dpi-reset" class="dpi-reset" aria-label="恢复默认界面比例105%">默认</button></div></div>
+    <div class="setting-row"><div><h2 id="dpi-label">界面 DPI</h2><p class="hint">85%～115% · 即时保存</p></div><div class="dpi-controls" role="group" aria-labelledby="dpi-label"><button type="button" id="dpi-decrease" class="icon-button" aria-label="缩小界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="dpi-value" aria-live="polite">100%</output><button type="button" id="dpi-increase" class="icon-button" aria-label="放大界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button><button type="button" id="dpi-reset" class="dpi-reset" aria-label="恢复默认界面比例100%">默认</button></div></div>
     <div class="setting-row preference-choice"><div><h2>写入模式</h2><p class="hint" id="write-mode-hint">默认使用事件驱动</p></div><div class="segmented solid" role="group" aria-label="温控写入模式"><label><input type="radio" name="write_mode" value="loop"><span>循环维护写入</span></label><label><input type="radio" name="write_mode" value="event" checked><span>事件驱动写入</span></label></div></div>
     <div class="setting-row"><div><label for="detailed_logging">详细日志</label><p class="hint">默认关闭 · 按大小轮转保留</p></div><input id="detailed_logging" class="switch" type="checkbox"></div>
     <p id="logging-error" class="hint error-text" hidden></p>

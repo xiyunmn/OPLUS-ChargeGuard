@@ -8,15 +8,13 @@ const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不�
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
-let requestEpoch=0,pollGeneration=0,pollTimer=null,pollingActive=false,viewOpen=true;
+let requestEpoch=0,pollGeneration=0,pollTimer=null,pollingActive=false,viewOpen=true,startupPresented=false;
 let config=null,dirty=false,busy=false,refreshing=false,loadingLogs=false,loadingNodes=false;
 let currentPage='overview',lastStatus=null,nodeIdentity='',nodeFilter='all',logFilter='all',backendFilter='all';
 let diagnosticTab='logs',diagnosticExpanded=false,nodes=[],logEntries=[],logsLoaded=false;
 const pageScroll=new Map(),logRecords=new Map(),backendRecords=new Map();
 
-if(CG.available()){
-  const link=document.createElement('link');link.rel='stylesheet';link.href='/internal/insets.css';document.head.append(link);
-}
+CGStartup.prepare();
 function element(tag,text,cls){const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e;}
 function setText(node,value){const next=String(value??'—');if(node.textContent!==next)node.textContent=next;}
 function icon(name){
@@ -312,15 +310,15 @@ function diagnostics(tab,expanded=true){
 }
 async function refresh(){
   if(refreshing||busy||document.hidden||!viewOpen||!CG.available())return;
-  refreshing=true;const epoch=requestEpoch,generation=pollGeneration;
+  refreshing=true;const epoch=requestEpoch,generation=pollGeneration,initial=!startupPresented;let present=false;
   try{
-    const data=await CG.call('ui-status');if(!requestCurrent(epoch,generation)||busy)return;
-    if(!dirty&&data.config)populate(data.config);if($('message').dataset.kind==='connection')message('');render(data);loadNodes();
+    const data=await CG.call(initial?'ui-initial':'ui-status',undefined,initial?5000:20000);if(!requestCurrent(epoch,generation)||busy)return;
+    if(!dirty&&data.config)populate(data.config);if($('message').dataset.kind==='connection')message('');render(data);if(initial&&data.thermal_error)setText($('node-note'),'接口读取失败：'+data.thermal_error);present=true;if(!initial)loadNodes();
   }catch(error){
     if(!requestCurrent(epoch,generation))return;clearTelemetry();
     if(lastStatus){lastStatus={...lastStatus,fresh:false};renderBackends(lastStatus);}
-    setText($('core-state'),'连接失败');$('core-badge').dataset.tone='warn';paintState($('diagnostic-state'),'状态未知','warn');setText($('runtime-mode'),'等待连接');setText($('charge-state'),'状态未知');message(error.message,true,'connection');
-  }finally{refreshing=false;controls();}
+    setText($('core-state'),'连接失败');$('core-badge').dataset.tone='warn';paintState($('diagnostic-state'),'状态未知','warn');setText($('runtime-mode'),'等待连接');setText($('charge-state'),'状态未知');message(error.message,true,'connection');present=true;
+  }finally{refreshing=false;controls();if(initial&&present){startupPresented=true;await CGStartup.reveal();}}
 }
 async function save(event){
   event.preventDefault();if(busy||!config||!dirty)return;
@@ -376,12 +374,12 @@ for(const radio of document.querySelectorAll('[name=theme]')){radio.checked=radi
 function displayScale(value){
   if(value!==undefined)CGDisplay.set(value);
   const scale=CGDisplay.get();setText($('dpi-value'),scale+'%');
-  $('dpi-decrease').disabled=scale<=95;$('dpi-increase').disabled=scale>=115;
-  $('dpi-reset').disabled=scale===105;
+  $('dpi-decrease').disabled=scale<=CGDisplay.min;$('dpi-increase').disabled=scale>=CGDisplay.max;
+  $('dpi-reset').disabled=scale===CGDisplay.default;
 }
 $('dpi-decrease').onclick=()=>displayScale(CGDisplay.get()-5);
 $('dpi-increase').onclick=()=>displayScale(CGDisplay.get()+5);
-$('dpi-reset').onclick=()=>displayScale(105);displayScale();
+$('dpi-reset').onclick=()=>displayScale(CGDisplay.default);displayScale();
 let openingBrowser=false;
 for(const button of document.querySelectorAll('[data-browser-command]'))button.onclick=async()=>{
   if(openingBrowser)return;
@@ -419,5 +417,5 @@ function resumePolling(){
 document.addEventListener('visibilitychange',resumePolling);
 window.addEventListener('pagehide',()=>{viewOpen=false;pausePolling();});window.addEventListener('pageshow',()=>{viewOpen=true;resumePolling();});
 controls();labels();
-if(CG.available())resumePolling();else{setText($('core-state'),'离线');setText($('runtime-mode'),'未连接');setText($('reason'),'请在模块管理器中打开');$('reason').hidden=false;}
+if(CG.available())resumePolling();else{setText($('oem-version'),'未连接设备');setText($('core-state'),'离线');setText($('runtime-mode'),'未连接');setText($('reason'),'请在模块管理器中打开');$('reason').hidden=false;startupPresented=true;CGStartup.reveal();}
 })();

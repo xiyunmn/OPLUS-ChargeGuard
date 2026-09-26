@@ -1,5 +1,5 @@
 :root {
-  font-size:16.8px;
+  font-size:18.4px;
   color-scheme:light;
   --bg:#f3f6fc;--panel:#fff;--text:#17243e;--muted:#74839b;--line:#e8edf5;
   --accent:#126bff;--accent-ink:#126bff;--soft:#eaf2ff;--neutral:#f0f3f9;
@@ -22,6 +22,9 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+html{background:var(--bg)}
+:root[data-startup=pending] body{visibility:hidden}
+:root[data-startup=pending] *, :root[data-startup=pending] *:before, :root[data-startup=pending] *:after{transition:none!important}
 body{height:100dvh;margin:0;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:0.9375rem/1.45 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;-webkit-tap-highlight-color:transparent}
 button,input{font:inherit}button{cursor:pointer}button,input,summary,a{touch-action:manipulation}
 button{border:0;background:none;color:inherit}button:disabled,input:disabled{opacity:.45;cursor:default}
@@ -153,11 +156,13 @@ pre{font:0.625rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space
 @media(max-width:380px){.header-inner{padding-inline:max(0.875rem,var(--left)) max(0.875rem,var(--right))}header h1{font-size:1.125rem}.subtitle{font-size:0.625rem}main#content{padding-inline:max(0.75rem,var(--left)) max(0.75rem,var(--right))}.card{padding-inline:0.875rem}.battery-value{font-size:3rem}.battery-side strong{font-size:2rem}.target-strip{gap:0.25rem;font-size:0.5625rem}.target-strip>span{font-size:0.53125rem}.backend-chip{font-size:0.5625rem}.runtime-meta{font-size:0.5625rem}.temperature-tag{min-width:2.125rem}.temperature-head{gap:0.4375rem}.temperature-head output{font-size:1.4375rem}.preference-choice{grid-template-columns:minmax(0,1fr) minmax(0,56%);gap:0.375rem}.preference-choice .segmented label{font-size:0.59375rem}.diagnostic-tabs [role=tab]{font-size:0.71875rem;gap:0.3125rem}.tab-count{padding-inline:0.25rem}.panel-toolbar{gap:0.25rem}#log-total{display:none}.node-columns,.node-row{grid-template-columns:minmax(0,1fr) 3.5rem 3.3125rem;gap:0.4375rem}.node-filters{gap:0.25rem}.node-filters .filter-button{padding-inline:0.3125rem;font-size:0.625rem}.backend-values{gap:0.5rem 0.625rem}.backend-values>div{gap:0.25rem;font-size:0.59375rem}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 
-:root[data-ui-scale="95"]{font-size:15.2px}
-:root[data-ui-scale="100"]{font-size:16px}
-:root[data-ui-scale="105"]{font-size:16.8px}
-:root[data-ui-scale="110"]{font-size:17.6px}
-:root[data-ui-scale="115"]{font-size:18.4px}
+:root[data-ui-scale="85"]{font-size:15.64px}
+:root[data-ui-scale="90"]{font-size:16.56px}
+:root[data-ui-scale="95"]{font-size:17.48px}
+:root[data-ui-scale="100"]{font-size:18.4px}
+:root[data-ui-scale="105"]{font-size:19.32px}
+:root[data-ui-scale="110"]{font-size:20.24px}
+:root[data-ui-scale="115"]{font-size:21.16px}
 .dpi-controls{display:flex;align-items:center;gap:.25rem;flex:none}
 .dpi-controls output{min-width:3rem;text-align:center;font-size:.8125rem;font-weight:650;color:var(--accent-ink);font-variant-numeric:tabular-nums}
 .dpi-controls .icon-button{width:44px;height:44px;background:var(--soft)}
