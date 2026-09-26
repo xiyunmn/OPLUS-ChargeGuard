@@ -1,8 +1,8 @@
 # OPLUS 充电温控
 
-面向 OPLUS 设备的充电温控模块，提供 Rust 控制核心与中文 WebUI。
+面向 OPLUS 设备的充电温控模块，提供 Rust 控制核心与 WebUI。
 
-**版本：v1.0.0 · 模块 ID：`charge_guard` · 作者：xiyunmn**
+**版本：v1.0.0 · 模块 ID：`charge_guard`**
 
 ## 功能
 
@@ -20,17 +20,6 @@
 
 将 `*_magisk.zip` 交给模块管理器安装，再从 WebUI 配置。详细日志默认关闭，可在排查问题时开启并导出。
 
-## 获取构建
-
-GitHub **Actions** 提供两种构建：
-
-| 工作流 | 触发方式 | 版本标注 |
-|---|---|---|
-| Beta build | 推送分支提交 | `1.0.0-beta` |
-| Release build | 手动 Run workflow | `1.0.0-release` |
-
-运行成功后，从该次运行的 **Artifacts** 下载安装包与源码包。工作流不会自动创建 GitHub Release；通道名称不代表所有设备均已验收。
-
 ## 本地构建
 
 支持 Windows 与 Linux。准备 Python 3.11+、Rust 1.85.1（含 `aarch64-linux-android` 目标）、JDK 17，以及 Android SDK：平台 35、Build Tools 36.0.0、NDK 27.3.13750724。
@@ -44,3 +33,6 @@ python tools/build.py build --channel release
 
 也可使用 `--sdk`、`--ndk`、`--jdk` 指定路径。产物位于 `target/dist/`，构建不会改写工作区版本信息。依赖按锁文件获取，需要离线构建时显式添加 `--offline`。
 
+## 协议
+
+本项目采用 [MIT License](LICENSE)。

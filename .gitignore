@@ -68,3 +68,4 @@
 *.zip
 __pycache__/
 !/README.md
+!/LICENSE

@@ -44,11 +44,11 @@ def source_files():
 
 def audit(a,m):
     allowed={p.relative_to(ROOT).as_posix() for p in source_files()}
-    allowed.add('README.md')
+    allowed.update(('README.md','LICENSE'))
     tracked=run(['git','ls-files','-z'],capture_output=True).stdout.decode('utf-8').split('\0')
     forbidden=[p for p in tracked if p and (p not in allowed or 'local_docs' in p.lower().split('/'))]
     if forbidden:raise SystemExit('Files outside build allowlist: '+', '.join(forbidden))
-    print('Git index contains only build inputs and README; local_docs is excluded.')
+    print('Git index contains only build inputs, README and LICENSE; local_docs is excluded.')
 
 def channel_build(a,m):
     # Materialize channel metadata under target. Never rewrite the checkout.
