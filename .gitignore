@@ -57,6 +57,7 @@
 !/src/storage.rs
 !/tools/
 !/tools/build.py
+!/tools/ci.py
 !/tools/cooling_events.c
 
 [lL][oO][cC][aA][lL]_[dD][oO][cC][sS]/

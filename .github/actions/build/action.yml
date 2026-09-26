@@ -1,5 +1,5 @@
 name: Build Android module
-description: Build ARM64 installation and source ZIPs from locked inputs
+description: Build a directly downloadable ARM64 module installation ZIP
 inputs:
   channel:
     description: beta or release
@@ -10,6 +10,13 @@ runs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.13'
+    - name: Resolve build version
+      id: version
+      shell: bash
+      env:
+        CG_CHANNEL: ${{ inputs.channel }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: python tools/ci.py "$CG_CHANNEL"
     - uses: actions/setup-java@v4
       with:
         distribution: temurin
@@ -32,16 +39,20 @@ runs:
         python tools/build.py audit
         for file in module/webroot/*.js; do node --check "$file"; done
         cargo test --locked --lib --features fixtures
-    - name: Build and validate packages
+    - name: Build and validate installation ZIP
       shell: bash
       env:
         CG_CHANNEL: ${{ inputs.channel }}
-      run: python tools/build.py build --channel "$CG_CHANNEL" --sdk "$ANDROID_HOME" --jdk "$JAVA_HOME"
-    - name: Upload installation and source ZIPs
-      uses: actions/upload-artifact@v4
+        CG_BETA_NUMBER: ${{ steps.version.outputs.beta_number }}
+      run: |
+        args=(--channel "$CG_CHANNEL" --installation-only)
+        if [[ "$CG_CHANNEL" == beta ]]; then args+=(--beta-number "$CG_BETA_NUMBER"); fi
+        python tools/build.py build "${args[@]}" --sdk "$ANDROID_HOME" --jdk "$JAVA_HOME"
+    - name: Upload module ZIP without an outer archive
+      uses: actions/upload-artifact@v7
       with:
-        name: charge_guard-${{ inputs.channel }}-${{ github.run_number }}
-        path: target/dist/*.zip
+        path: target/dist/${{ steps.version.outputs.filename }}
+        archive: false
+        overwrite: true
         if-no-files-found: error
-        compression-level: 0
         retention-days: 30

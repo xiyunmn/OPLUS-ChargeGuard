@@ -6,7 +6,7 @@ RUNTIME=('module.prop','customize.sh','service.sh','post-fs-data.sh','uninstall.
          'webroot/index.html','webroot/style.css','webroot/theme.js','webroot/bridge.js','webroot/app.js',
          'META-INF/com/google/android/update-binary','META-INF/com/google/android/updater-script')
 SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattributes','.gitignore')
-BUILD_SUPPORT=('tools/build.py','tools/cooling_events.c',
+BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c',
                '.github/workflows/beta.yml','.github/workflows/release.yml',
                '.github/actions/build/action.yml')
 STAMP=(2026,1,1,0,0,0)
@@ -50,11 +50,22 @@ def audit(a,m):
     if forbidden:raise SystemExit('Files outside build allowlist: '+', '.join(forbidden))
     print('Git index contains only build inputs, README and LICENSE; local_docs is excluded.')
 
+def channel_metadata(m,channel,beta_number=None):
+    match=re.fullmatch(r'(\d+\.\d+\.\d+)(?:-(beta|release)([1-9]\d*)?)?',m['version'])
+    if not match:raise SystemExit('--channel requires a base, beta or release version such as 1.0.0')
+    if match[2]=='release' and match[3]:raise SystemExit('release must not have a numeric suffix')
+    release_code=int(m['versionCode'])
+    if match[2]=='beta':release_code+=10000-int(match[3]) if match[3] else 1
+    number=beta_number if beta_number is not None else int(match[3] or 1)
+    if channel=='beta' and not 1<=number<=9999:raise SystemExit('beta number must be between 1 and 9999')
+    version=match[1]+'-'+channel+(str(number) if channel=='beta' else '')
+    code=release_code-10000+number if channel=='beta' else release_code
+    if code<=0:raise SystemExit('versionCode must reserve 10000 values below release for beta builds')
+    return {**m,'version':version,'versionCode':str(code)}
+
 def channel_build(a,m):
     # Materialize channel metadata under target. Never rewrite the checkout.
-    match=re.fullmatch(r'(\d+\.\d+\.\d+)(?:-(beta|release))?',m['version'])
-    if not match:raise SystemExit('--channel requires a base, beta or release version such as 1.0.0')
-    version=match[1]+'-'+a.channel
+    generated=channel_metadata(m,a.channel,a.beta_number);version=generated['version']
     work=ROOT/'target/channel-build'/a.channel
     if work.exists():shutil.rmtree(work)
     for p in source_files():
@@ -64,8 +75,7 @@ def channel_build(a,m):
         p=work/name;s=p.read_text(encoding='utf-8')
         if name=='module/module.prop':
             s=s.replace('version='+m['version']+'\n','version='+version+'\n')
-            code=int(m['versionCode'])+(1 if match[2]=='beta' else 0)-(1 if a.channel=='beta' else 0)
-            s=re.sub(r'(?m)^versionCode=\d+$','versionCode='+str(code),s)
+            s=re.sub(r'(?m)^versionCode=\d+$','versionCode='+generated['versionCode'],s)
         else:
             # Limit replacement to this package, never a dependency's version.
             pattern=r'(name\s*=\s*"charge-guard"\s*\nversion\s*=\s*")'+re.escape(m['version'])+r'(")'
@@ -77,11 +87,14 @@ def channel_build(a,m):
     for flag in ('sdk','ndk','jdk'):
         if getattr(a,flag):command+=['--'+flag,pathlib.Path(getattr(a,flag)).resolve()]
     if a.offline:command.append('--offline')
+    if a.installation_only:command.append('--installation-only')
     run(command)
-def package(stage,out,m):
+def package(stage,out,m,installation_only=False):
     names=(*RUNTIME,'bin/cg','bin/cg-camera.jar','bin/cg-cooling-events')
     assert not (stage/'system.prop').exists()
-    archive(out/f"{m['id']}_{m['version']}_magisk.zip",[(n,(stage/n).read_bytes(),n.endswith('.sh') or n in ('bin/cg','bin/cg-cooling-events') or n.endswith('/update-binary')) for n in names])
+    filename=f"{m['id']}_v{m['version']}.zip" if installation_only else f"{m['id']}_{m['version']}_magisk.zip"
+    archive(out/filename,[(n,(stage/n).read_bytes(),n.endswith('.sh') or n in ('bin/cg','bin/cg-cooling-events') or n.endswith('/update-binary')) for n in names])
+    if installation_only:return
     files=source_files()
     archive(out/f"{m['id']}_{m['version']}_source.zip",[("charge-guard/"+p.relative_to(ROOT).as_posix(),normalized(p),p.suffix=='.sh' or p.name=='update-binary') for p in files])
 def path_variants(path):
@@ -171,7 +184,7 @@ def build(a,m):
     run(args,env=env)
     binary=work/'cargo/aarch64-linux-android/release/charge-guard';verify_elf(binary,llvm/('llvm-readelf'+exe),local_prefixes);shutil.copyfile(binary,stage/'bin/cg')
     cooling_listener(env,llvm,stage/'bin/cg-cooling-events')
-    package(stage,pathlib.Path(a.output).resolve() if a.output else ROOT/'target/dist',m)
+    package(stage,pathlib.Path(a.output).resolve() if a.output else ROOT/'target/dist',m,a.installation_only)
 def linux_path(p):
     p=pathlib.Path(p).resolve();return '/mnt/'+p.drive[0].lower()+p.as_posix().split(':',1)[1]
 def check(a,m):
@@ -216,9 +229,13 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['build','check','audit'],nargs='?',default='build')
     for flag in ['sdk','ndk','jdk','output']:parser.add_argument('--'+flag)
     parser.add_argument('--channel',choices=['beta','release'])
+    parser.add_argument('--beta-number',type=int)
+    parser.add_argument('--installation-only',action='store_true')
     parser.add_argument('--offline',action='store_true');parser.add_argument('--wsl',default='Debian')
     a=parser.parse_args();m=metadata()
     if a.channel and a.command!='build':parser.error('--channel is only valid for build')
+    if a.beta_number is not None and a.channel!='beta':parser.error('--beta-number requires --channel beta')
+    if a.installation_only and a.command!='build':parser.error('--installation-only is only valid for build')
     try:(channel_build if a.channel else {'check':check,'build':build,'audit':audit}[a.command])(a,m)
     except subprocess.CalledProcessError as e:
         if e.stdout:print(e.stdout[-5000:])
