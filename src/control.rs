@@ -1,0 +1,757 @@
+//! Independent, idempotent control backends with recovery ownership, not drift gates.
+use crate::{
+    config::{Config, Temperatures, WriteMode},
+    discovery::{self, Group, Node},
+    hardware::{Hardware, MASKS},
+    storage, Result,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    os::unix::fs::MetadataExt,
+};
+pub const GAME: &str = "/proc/game_opt/disable_cpufreq_limit";
+pub const BOUNCE: &str = "/sys/module/cpufreq_bouncing/parameters/enable";
+pub const OMRG: &str = "/sys/devices/platform/soc/soc:oplus-omrg/oplus-omrg0/ruler_enable";
+pub const MIGT: &str = "/sys/module/migt/parameters/glk_freq_limit_walt";
+pub const ORMS: &str = "vendor.oplus.ormsHalService-aidl-defaults";
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Method {
+    Write,
+    Shell,
+    Emulation,
+    Bind { source: String },
+    Service,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Operation {
+    pub id: String,
+    pub family: String,
+    pub target: String,
+    pub desired: String,
+    pub method: Method,
+    pub reset: Option<String>,
+    pub sensor_type: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owned {
+    pub op: Operation,
+    pub original: Option<String>,
+    pub applied: bool,
+    pub error: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Journal {
+    pub schema: u32,
+    pub boot_id: String,
+    pub entries: BTreeMap<String, Owned>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackendStatus {
+    pub id: String,
+    pub family: String,
+    pub target: String,
+    pub desired: String,
+    pub state: String,
+    pub detail: Option<String>,
+}
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Verification {
+    pub observed_before: Option<String>,
+    pub observed_after: Option<String>,
+    pub checked_ms: u64,
+    pub write_performed: bool,
+    pub verification: String,
+    pub verification_checks: u64,
+    pub repair_writes: u64,
+    pub skipped_writes: u64,
+}
+/// State-bearing interfaces, excluding masked game_opt displays and shell/emulation.
+pub fn can_verify(op: &Operation) -> bool {
+    op.method == Method::Write
+        && (op.target == BOUNCE || (op.family == "cooling" && op.target.ends_with("/cur_state")))
+}
+pub struct Controller {
+    pub journal: Journal,
+    pub rounds: u64,
+    pub stable: u32,
+    persisted: RefCell<Option<Journal>>,
+    persisted_stamp: RefCell<Option<[u64; 10]>>,
+    statuses: BTreeMap<String, BackendStatus>,
+    verify_nodes: bool,
+    verification: BTreeMap<String, Verification>,
+    repair_after: BTreeMap<String, u64>,
+}
+pub fn mask_source(path: &str) -> String {
+    format!("{MASKS}/mask_{:x}", Sha256::digest(path.as_bytes()))
+}
+fn write(
+    id: &str,
+    family: &str,
+    path: &str,
+    value: String,
+    reset: Option<String>,
+    method: Method,
+    kind: Option<String>,
+) -> Operation {
+    Operation {
+        id: id.into(),
+        family: family.into(),
+        target: path.into(),
+        desired: value,
+        method,
+        reset,
+        sensor_type: kind,
+    }
+}
+pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Operation> {
+    if !c.enabled {
+        return vec![];
+    }
+    let mut ops = vec![];
+    for name in ["thermal-engine", ORMS] {
+        ops.push(write(
+            name,
+            "services",
+            name,
+            "stopped".into(),
+            Some("running".into()),
+            Method::Service,
+            None,
+        ));
+    }
+    ops.push(write(
+        "game_prepare",
+        "frequency",
+        GAME,
+        "0".into(),
+        Some("0".into()),
+        Method::Write,
+        None,
+    ));
+    for (name, value) in [("cpu_max_freq", 2147483647), ("cpu_min_freq", 0)] {
+        let v = (0..8)
+            .map(|i| format!("{i}:{value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // The original resets these requests to unbounded/zero and does not replay an unreadable prior request.
+        ops.push(write(
+            name,
+            "frequency",
+            &format!("/proc/game_opt/{name}"),
+            v.clone(),
+            Some(v),
+            Method::Write,
+            None,
+        ));
+    }
+    ops.push(write(
+        "game_opt",
+        "frequency",
+        GAME,
+        "1".into(),
+        Some("0".into()),
+        Method::Write,
+        None,
+    ));
+    for (id, path) in [("bouncing", BOUNCE), ("omrg", OMRG), ("migt", MIGT)] {
+        ops.push(write(
+            id,
+            "frequency",
+            path,
+            "0".into(),
+            Some("1".into()),
+            Method::Write,
+            None,
+        ));
+    }
+    for (path, kind) in discovery::cooling_nodes(h) {
+        ops.push(write(
+            &path,
+            "cooling",
+            &path,
+            "0".into(),
+            None,
+            Method::Write,
+            Some(kind),
+        ));
+    }
+    if c.horae_stop {
+        ops.push(write(
+            "horae",
+            "services",
+            "horae",
+            "stopped".into(),
+            Some("running".into()),
+            Method::Service,
+            None,
+        ));
+    }
+    for i in 0..h.capabilities().shell_slots.unwrap_or(6) {
+        ops.push(write(
+            &format!("shell_temp_{i}"),
+            "shell",
+            "/proc/shell-temp",
+            format!("{i} {}", t.battery),
+            Some(format!("{i} 0")),
+            Method::Shell,
+            None,
+        ));
+    }
+    for n in nodes.iter().filter(|n| n.group == Group::Shell) {
+        if let Some(p) = &n.emul_path {
+            ops.push(write(
+                p,
+                "shell",
+                p,
+                t.battery.to_string(),
+                Some("0".into()),
+                Method::Emulation,
+                Some(n.kind.clone()),
+            ));
+        }
+    }
+    for group in [Group::Cpu, Group::Gpu, Group::Ddr] {
+        for n in nodes.iter().filter(|n| n.group == group) {
+            let mc = match group {
+                Group::Cpu => t.cpu,
+                Group::Gpu => t.gpu,
+                _ => t.ddr,
+            };
+            let raw = h
+                .read(&n.path)
+                .ok()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
+            let family = match group {
+                Group::Cpu => "cpu",
+                Group::Gpu => "gpu",
+                _ => "ddr",
+            };
+            ops.push(write(
+                &n.path,
+                family,
+                &n.path,
+                discovery::mask_raw(mc, raw).to_string(),
+                None,
+                Method::Bind {
+                    source: mask_source(&n.path),
+                },
+                Some(n.kind.clone()),
+            ));
+        }
+    }
+    ops
+}
+fn sensor_type(h: &Hardware, op: &Operation) -> Option<String> {
+    let parent = op.target.rsplit_once('/')?.0;
+    h.read(&format!("{parent}/type")).ok()
+}
+impl Controller {
+    fn stamp(path: &std::path::Path) -> Option<[u64; 10]> {
+        let m = fs::symlink_metadata(path).ok()?;
+        Some([
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime() as u64,
+            m.mtime_nsec() as u64,
+            m.ctime() as u64,
+            m.ctime_nsec() as u64,
+            m.mode() as u64,
+            m.uid() as u64,
+            m.nlink(),
+        ])
+    }
+    pub fn load(h: &Hardware) -> Result<Self> {
+        let path = h.state().join("ownership.json");
+        let boot = h
+            .read("/proc/sys/kernel/random/boot_id")
+            .unwrap_or_else(|_| "fixture".into());
+        let persisted = if path.exists() {
+            Some(storage::load::<Journal>(&path, 2_097_152)?)
+        } else {
+            None
+        };
+        let mut j = persisted.clone().unwrap_or_else(|| Journal {
+            schema: 2,
+            boot_id: boot.clone(),
+            entries: BTreeMap::new(),
+        });
+        if !matches!(j.schema, 2 | 3) {
+            return Err("ownership_schema_invalid".into());
+        }
+        for e in j.entries.values() {
+            validate_operation(&e.op)?;
+        }
+        if j.boot_id != boot {
+            j = Journal {
+                schema: 2,
+                boot_id: boot,
+                entries: BTreeMap::new(),
+            };
+        }
+        j.schema = 3;
+        Ok(Self {
+            journal: j,
+            rounds: 0,
+            stable: 0,
+            persisted: RefCell::new(persisted),
+            persisted_stamp: RefCell::new(Self::stamp(&path)),
+            statuses: BTreeMap::new(),
+            verify_nodes: false,
+            verification: BTreeMap::new(),
+            repair_after: BTreeMap::new(),
+        })
+    }
+    pub fn set_write_mode(&mut self, mode: WriteMode) {
+        self.verify_nodes = mode == WriteMode::Event;
+    }
+    pub fn verification(&self, id: &str) -> Option<&Verification> {
+        self.verification.get(id)
+    }
+    pub fn verification_counters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "verification_checks":self.verification.values().map(|v|v.verification_checks).sum::<u64>(),
+            "repair_writes":self.verification.values().map(|v|v.repair_writes).sum::<u64>(),
+            "skipped_writes":self.verification.values().map(|v|v.skipped_writes).sum::<u64>()
+        })
+    }
+    fn save(&self, h: &Hardware) -> Result<()> {
+        let path = h.state().join("ownership.json");
+        if self.persisted.borrow().as_ref() == Some(&self.journal)
+            && self.persisted_stamp.borrow().is_some()
+            && *self.persisted_stamp.borrow() == Self::stamp(&path)
+        {
+            return Ok(());
+        }
+        if let Some(old) = self.persisted.borrow().as_ref() {
+            if old.boot_id != self.journal.boot_id {
+                storage::json(&h.state().join("ownership.previous-boot.json"), old)?;
+            }
+        }
+        storage::json(&path, &self.journal)?;
+        *self.persisted.borrow_mut() = Some(self.journal.clone());
+        *self.persisted_stamp.borrow_mut() = Self::stamp(&path);
+        Ok(())
+    }
+    pub fn reconcile(&mut self, h: &Hardware, ops: &[Operation]) -> Vec<BackendStatus> {
+        self.reconcile_guarded(h, ops, || false)
+    }
+    pub fn reconcile_guarded<F: Fn() -> bool>(
+        &mut self,
+        h: &Hardware,
+        ops: &[Operation],
+        release_horae: F,
+    ) -> Vec<BackendStatus> {
+        let due = ops.iter().map(|op| op.id.clone()).collect();
+        self.reconcile_selected(h, ops, &due, release_horae)
+    }
+    /// The complete desired set determines ownership; only `due` is maintained.
+    pub fn reconcile_selected<F: Fn() -> bool>(
+        &mut self,
+        h: &Hardware,
+        ops: &[Operation],
+        due: &BTreeSet<String>,
+        release_horae: F,
+    ) -> Vec<BackendStatus> {
+        let wanted = ops.iter().map(|o| o.id.as_str()).collect::<BTreeSet<_>>();
+        let obsolete = self
+            .journal
+            .entries
+            .keys()
+            .filter(|k| !wanted.contains(k.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.statuses.retain(|id, _| {
+            wanted.contains(id.as_str())
+                || self.journal.entries.contains_key(id)
+                || id == "ownership"
+        });
+        let journal_dirty = self.persisted.borrow().as_ref().is_some_and(|j| {
+            j != &self.journal
+                || *self.persisted_stamp.borrow() != Self::stamp(&h.state().join("ownership.json"))
+        });
+        if due.is_empty() && obsolete.is_empty() && !journal_dirty {
+            return self.statuses.values().cloned().collect();
+        }
+        self.rounds += 1;
+        let mut statuses = self.restore_ids(h, &obsolete);
+        let mut changed = false;
+        for op in ops.iter().filter(|op| due.contains(&op.id)) {
+            let previously_owned = self.journal.entries.contains_key(&op.id);
+            let mut verification = self.verification.get(&op.id).cloned().unwrap_or_default();
+            verification.write_performed = false;
+            verification.verification = "not_checked".into();
+            verification.observed_before = None;
+            verification.observed_after = None;
+            verification.checked_ms = crate::runtime::now_ms();
+            if release_horae() {
+                if self.journal.entries.contains_key("horae") {
+                    statuses.extend(self.yield_horae(h));
+                }
+                if op.id == "horae" {
+                    continue;
+                }
+            }
+            let result = (|| -> Result<&'static str> {
+                validate_operation(op)?;
+                if op.method == Method::Service {
+                    if h.service_state(&op.target)?.is_none() {
+                        return Ok("unsupported");
+                    }
+                } else if !h.present(&op.target)? {
+                    return Ok("unavailable");
+                }
+                if op.sensor_type.is_some() && sensor_type(h, op) != op.sensor_type {
+                    return Err("node_identity_changed_waiting_for_discovery".into());
+                }
+                if self
+                    .journal
+                    .entries
+                    .get(&op.id)
+                    .is_some_and(|e| e.op.sensor_type != op.sensor_type)
+                {
+                    let r = self.restore_ids(h, &[op.id.clone()]);
+                    if self.journal.entries.contains_key(&op.id) {
+                        return Err(format!("old_identity_restore_pending:{r:?}"));
+                    }
+                }
+                if !self.journal.entries.contains_key(&op.id) {
+                    let original = match op.method {
+                        Method::Service => h.service_state(&op.target)?,
+                        Method::Emulation | Method::Shell | Method::Bind { .. } => None,
+                        Method::Write => h.read(&op.target).ok(),
+                    };
+                    if op.method == Method::Service
+                        && !matches!(original.as_deref(), Some("running" | "stopped"))
+                    {
+                        return Err("service_original_state_unavailable".into());
+                    }
+                    if op.method == Method::Write
+                        && original.is_none()
+                        && (op.reset.is_none() || (self.verify_nodes && can_verify(op)))
+                    {
+                        return Err("original_value_unavailable".into());
+                    }
+                    self.journal.entries.insert(
+                        op.id.clone(),
+                        Owned {
+                            op: op.clone(),
+                            original,
+                            applied: false,
+                            error: None,
+                        },
+                    );
+                    if let Err(e) = self.save(h) {
+                        self.journal.entries.remove(&op.id);
+                        return Err(e);
+                    }
+                    changed = true;
+                }
+                if self
+                    .journal
+                    .entries
+                    .get(&op.id)
+                    .is_some_and(|e| e.op.desired != op.desired)
+                {
+                    let previous = self.journal.entries[&op.id].op.desired.clone();
+                    self.journal.entries.get_mut(&op.id).unwrap().op.desired = op.desired.clone();
+                    if let Err(error) = self.save(h) {
+                        self.journal.entries.get_mut(&op.id).unwrap().op.desired = previous;
+                        return Err(error);
+                    }
+                }
+                // Re-establish a removed/replaced journal before any new device write.
+                self.save(h)?;
+                if let Method::Bind { source } = &op.method {
+                    let needs_bind = !h.mounted(&op.target, source);
+                    if needs_bind || h.read(source).ok().as_deref() != Some(op.desired.as_str()) {
+                        h.mask_value(source, &op.target, &op.desired)?;
+                        changed = true;
+                    }
+                    if needs_bind {
+                        h.bind(source, &op.target)?;
+                    }
+                    if h.read(&op.target)? != op.desired {
+                        return Err("bind_readback_mismatch".into());
+                    }
+                } else if op.method == Method::Service {
+                    apply_service(h, &op.target, false)?;
+                } else {
+                    if self.verify_nodes && can_verify(op) {
+                        verification.verification_checks += 1;
+                        let current = h.read(&op.target).map_err(|error| {
+                            verification.verification = "unreadable".into();
+                            error
+                        })?;
+                        verification.observed_before = Some(current.clone());
+                        if current.trim() == op.desired.trim() {
+                            verification.observed_after = Some(current);
+                            verification.verification = "matched".into();
+                            verification.skipped_writes += 1;
+                            return Ok("applied");
+                        }
+                        verification.verification = "mismatched".into();
+                        if previously_owned
+                            && self
+                                .repair_after
+                                .get(&op.id)
+                                .is_some_and(|deadline| crate::runtime::now_ms() < *deadline)
+                        {
+                            return Err("node_repair_rate_limited".into());
+                        }
+                    }
+                    let write_result = h.write(&op.target, &op.desired);
+                    if self.verify_nodes
+                        && can_verify(op)
+                        && (previously_owned || write_result.is_err())
+                    {
+                        self.repair_after.insert(
+                            op.id.clone(),
+                            crate::runtime::now_ms().saturating_add(self.interval_secs() * 1000),
+                        );
+                    }
+                    write_result?;
+                    verification.write_performed = true;
+                    if self.verify_nodes && can_verify(op) {
+                        verification.repair_writes += 1;
+                    }
+                    if op.method == Method::Write && !op.target.starts_with("/proc/game_opt/cpu_") {
+                        let readback = h.read(&op.target)?;
+                        verification.observed_after = Some(readback.clone());
+                        if readback.trim() != op.desired.trim() {
+                            if self.verify_nodes && can_verify(op) {
+                                self.repair_after.insert(
+                                    op.id.clone(),
+                                    crate::runtime::now_ms()
+                                        .saturating_add(self.interval_secs() * 1000),
+                                );
+                            }
+                            return Err("node_readback_mismatch".into());
+                        }
+                    }
+                }
+                Ok("applied")
+            })();
+            let (state, detail) = match result {
+                Ok(s) => (
+                    s.to_owned(),
+                    if s == "applied" && op.target.starts_with("/proc/game_opt/cpu_") {
+                        Some("write_accepted_readback_masked_by_switch".into())
+                    } else if s == "applied"
+                        && matches!(op.method, Method::Shell | Method::Emulation)
+                    {
+                        Some("write_accepted_no_readback".into())
+                    } else {
+                        None
+                    },
+                ),
+                Err(e) => {
+                    changed = true;
+                    ("retrying".into(), Some(e))
+                }
+            };
+            if let Some(e) = self.journal.entries.get_mut(&op.id) {
+                e.applied = state == "applied";
+                e.error = if state == "retrying" {
+                    detail.clone()
+                } else {
+                    None
+                };
+            }
+            statuses.push(BackendStatus {
+                id: op.id.clone(),
+                family: op.family.clone(),
+                target: op.target.clone(),
+                desired: op.desired.clone(),
+                state,
+                detail,
+            });
+            if can_verify(op) {
+                self.verification.insert(op.id.clone(), verification);
+            }
+        }
+        if let Err(e) = self.save(h) {
+            statuses.push(BackendStatus {
+                id: "ownership".into(),
+                family: "storage".into(),
+                target: "ownership.json".into(),
+                desired: String::new(),
+                state: "retrying".into(),
+                detail: Some(e),
+            });
+        } else {
+            self.statuses.remove("ownership");
+        }
+        if changed {
+            self.stable = 0
+        } else {
+            self.stable = self.stable.saturating_add(1);
+        }
+        for status in statuses {
+            self.statuses.insert(status.id.clone(), status);
+        }
+        self.statuses.values().cloned().collect()
+    }
+    fn restore_ids(&mut self, h: &Hardware, ids: &[String]) -> Vec<BackendStatus> {
+        let before = self.journal.clone();
+        let mut entries = ids
+            .iter()
+            .filter_map(|id| self.journal.entries.get(id).cloned())
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|e| match e.op.method {
+            Method::Bind { .. } => 0,
+            Method::Shell | Method::Emulation => 1,
+            Method::Write => 2,
+            Method::Service => 3,
+        });
+        let mut statuses = vec![];
+        for e in entries {
+            let op = &e.op;
+            let r = (|| -> Result<()> {
+                validate_operation(op)?;
+                match &op.method {
+                    Method::Bind { source } => {
+                        h.unbind(&op.target, source)?;
+                        let _ = fs::remove_file(h.path(source));
+                    }
+                    Method::Service => match e.original.as_deref() {
+                        Some("running") => apply_service(h, &op.target, true)?,
+                        Some("stopped") => (),
+                        _ => return Err("service_restore_original_unknown".into()),
+                    },
+                    _ => {
+                        // The verified loaded driver rejects these indexes before touching memory.
+                        // This also retires rc.4 records without issuing another invalid reset write.
+                        if op.method == Method::Shell
+                            && h.capabilities().shell_slots == Some(3)
+                            && e.original.is_none()
+                            && (3..6).any(|i| {
+                                op.id == format!("shell_temp_{i}")
+                                    && op.desired.split_whitespace().next()
+                                        == Some(i.to_string().as_str())
+                                    && op.reset.as_deref() == Some(format!("{i} 0").as_str())
+                            })
+                        {
+                            return Ok(());
+                        }
+                        if !h.present(&op.target)? {
+                            return Err("restore_target_missing".into());
+                        }
+                        if op.sensor_type.is_some() && sensor_type(h, op) != op.sensor_type {
+                            return Ok(());
+                        }
+                        let value = if matches!(op.method, Method::Shell | Method::Emulation) {
+                            op.reset.as_ref()
+                        } else {
+                            if op.target.starts_with("/proc/game_opt/cpu_") {
+                                op.reset.as_ref()
+                            } else {
+                                e.original.as_ref().or(op.reset.as_ref())
+                            }
+                        };
+                        let value = value.ok_or("restore_value_unknown")?;
+                        h.write(&op.target, value)?;
+                        if op.method == Method::Write
+                            && !op.target.starts_with("/proc/game_opt/cpu_")
+                            && h.read(&op.target)?.trim() != value.trim()
+                        {
+                            return Err("restore_readback_mismatch".into());
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            let detail = r.err();
+            let restored = detail.is_none();
+            if restored {
+                self.journal.entries.remove(&op.id);
+            } else if let Some(ent) = self.journal.entries.get_mut(&op.id) {
+                ent.error = detail.clone();
+            }
+            statuses.push(BackendStatus {
+                id: op.id.clone(),
+                family: op.family.clone(),
+                target: op.target.clone(),
+                desired: String::new(),
+                state: if restored {
+                    "restored"
+                } else {
+                    "restore_pending"
+                }
+                .into(),
+                detail,
+            });
+        }
+        if !ids.is_empty() {
+            if let Err(error) = self.save(h) {
+                self.journal = before;
+                for status in &mut statuses {
+                    status.state = "restore_pending".into();
+                    status.detail = Some(format!("restore_journal_save:{error}"));
+                }
+            }
+        }
+        statuses
+    }
+    pub fn restore(&mut self, h: &Hardware) -> Result<Vec<BackendStatus>> {
+        let ids = self.journal.entries.keys().cloned().collect::<Vec<_>>();
+        let reports = self.restore_ids(h, &ids);
+        self.save(h)?;
+        Ok(reports)
+    }
+    pub fn yield_horae(&mut self, h: &Hardware) -> Vec<BackendStatus> {
+        self.restore_ids(h, &["horae".into()])
+    }
+    pub fn interval_secs(&self) -> u64 {
+        if self.stable >= 8 {
+            3
+        } else {
+            2
+        }
+    }
+}
+fn apply_service(h: &Hardware, name: &str, running: bool) -> Result<()> {
+    h.service(name, running)
+}
+fn validate_operation(op: &Operation) -> Result<()> {
+    let t = &op.target;
+    let thermal = ["/sys/class/thermal/", "/sys/devices/virtual/thermal/"]
+        .iter()
+        .any(|p| {
+            t.strip_prefix(p).is_some_and(|x| {
+                x.split_once('/').is_some_and(|(node, leaf)| {
+                    (discovery::numeric(node, "thermal_zone")
+                        && matches!(leaf, "temp" | "emul_temp"))
+                        || (discovery::numeric(node, "cooling_device") && leaf == "cur_state")
+                })
+            })
+        });
+    let ok = match &op.method {
+        Method::Service => matches!(t.as_str(), "horae" | "thermal-engine" | ORMS),
+        Method::Bind { source } => thermal && t.ends_with("/temp") && *source == mask_source(t),
+        Method::Emulation => thermal && t.ends_with("/emul_temp"),
+        Method::Shell => t == "/proc/shell-temp",
+        Method::Write => {
+            thermal
+                || matches!(
+                    t.as_str(),
+                    GAME | BOUNCE
+                        | OMRG
+                        | MIGT
+                        | "/proc/game_opt/cpu_max_freq"
+                        | "/proc/game_opt/cpu_min_freq"
+                )
+        }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err("invalid_owned_operation".into())
+    }
+}

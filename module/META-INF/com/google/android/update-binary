@@ -1,0 +1,13 @@
+#!/sbin/sh
+umask 022
+OUTFD=$2
+ZIPFILE=$3
+ui_print() { echo "$1"; }
+if [ ! -f /data/adb/magisk/util_functions.sh ]; then
+  ui_print "Install with Magisk or KernelSU Manager."
+  exit 1
+fi
+. /data/adb/magisk/util_functions.sh
+[ "$MAGISK_VER_CODE" -ge 20400 ] || abort "Magisk 20.4 or newer is required"
+install_module
+exit 0

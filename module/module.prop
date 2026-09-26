@@ -1,0 +1,6 @@
+id=charge_guard
+name=OPLUS 充电温控
+version=1.0.0
+versionCode=100001
+author=xiyunmn
+description=OPLUS 充电温控，支持充电 Horae 智能相机调整

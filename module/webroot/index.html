@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f3f6fc" id="theme-color">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>OPLUS 充电温控</title>
+<link rel="stylesheet" href="style.css">
+<script src="theme.js"></script><script src="bridge.js" defer></script><script src="app.js" defer></script>
+</head>
+<body>
+<svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M2 12h4l3-8 5 16 3-8h5"/></symbol>
+  <symbol id="i-thermo" viewBox="0 0 24 24"><path d="M9 14V5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0Z M12 7v10"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 11h6l-1 9 9-12h-6Z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M3 6h4m4 0h10M3 12h11m4 0h3M3 18h2m4 0h12"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 1 0 .5 9M20 2v5h-5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v6h16v-6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M6 12h12m-6-6v12"/></symbol>
+</defs></svg>
+<header><div class="header-inner"><div class="header-copy"><h1 id="page-title">OPLUS 充电温控</h1><p class="subtitle" id="oem-version">读取系统版本…</p></div><span id="core-badge" class="status-badge" data-tone="muted"><i class="status-dot"></i><span id="core-state">连接中</span></span></div></header>
+<main id="content"><div id="message" class="notice" role="status" hidden></div><form id="settings">
+<section id="page-overview" role="tabpanel" aria-labelledby="tab-overview">
+  <div class="card battery-card">
+    <div class="battery-heading"><p>电池接口温度</p><span class="charge-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span id="charge-state">—</span></span></div>
+    <div class="battery-reading"><div><div class="battery-value"><span id="temp">—</span><small>℃</small></div><p id="battery-note">等待接口读取</p></div><div class="battery-side"><div><strong id="capacity">—</strong><small id="capacity-unit" hidden>%</small></div><span>电池电量</span></div></div>
+    <div class="target-strip"><span id="target-label">配置目标</span><strong>BAT <span id="target-battery">—</span></strong><strong>CPU <span id="target-cpu">—</span></strong><strong>GPU <span id="target-gpu">—</span></strong><strong>DDR <span id="target-ddr">—</span></strong></div>
+  </div>
+  <div class="card runtime-card">
+    <div class="card-heading"><h2>控制状态</h2><span class="mode-badge" id="runtime-mode">等待连接</span></div>
+    <div class="runtime-meta"><strong id="profile">—</strong><span><span id="pid">—</span><span class="meta-dot">·</span><span id="freshness">尚无记录</span></span></div>
+    <p class="hint" id="reason" hidden></p>
+    <div class="runtime-stats"><div><strong id="round">—</strong><span>维护轮次</span></div><div><strong id="detected">—</strong><span>发现节点</span></div><div><strong id="mounts">—</strong><span>温度映射</span></div></div>
+    <div class="backend-chips"><div id="groups"></div><span id="camera-hint" hidden></span></div>
+  </div>
+  <div class="card nodes-card">
+    <div class="card-heading"><h2>温度接口</h2><div class="heading-actions"><span class="hint" id="node-note">读取值与模拟状态</span><button class="icon-button" type="button" id="toggle-nodes" aria-expanded="true" aria-controls="node-content" aria-label="收起温度接口"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron"/></svg></button></div></div>
+    <div id="node-summary" class="node-summary" hidden></div>
+    <div id="node-content">
+      <div class="filter-row node-filters" role="group" aria-label="节点筛选"><button type="button" class="filter-button" data-node-filter="all" aria-pressed="true"><span>全部</span><span class="filter-count">—</span></button><button type="button" class="filter-button" data-node-filter="shell" aria-pressed="false"><span>BAT</span></button><button type="button" class="filter-button" data-node-filter="cpu" aria-pressed="false"><span>CPU</span></button><button type="button" class="filter-button" data-node-filter="gpu" aria-pressed="false"><span>GPU</span></button><button type="button" class="filter-button" data-node-filter="ddr" aria-pressed="false"><span>DDR</span></button><button type="button" class="filter-button" data-node-filter="other" aria-pressed="false"><span>其他</span></button></div>
+      <div class="node-columns"><span>接口 / 来源</span><span>读取值</span><span>状态</span></div><div id="thermal-nodes" class="node-list"></div>
+      <p class="interface-note"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info"/></svg><span>模拟与映射读数不代表物理温度。</span></p>
+    </div>
+  </div>
+  <div class="core-actions"><button type="button" class="stop backend" id="stop"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stop"/></svg>停止并恢复</button><button type="button" class="primary backend" id="start" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pulse"/></svg>启动核心</button><button type="button" class="secondary backend" id="overview-refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+  <p class="footnote">开机自动观察 · 按预设开关运行</p>
+</section>
+<section id="page-global" role="tabpanel" aria-labelledby="tab-global" hidden>
+  <div class="card switch-card">
+    <div class="setting-row"><div><div class="setting-title"><label for="global_enabled">全局温控</label><span class="small-badge" id="global-flag">关闭</span></div><p class="hint">未使用充电预设时应用，默认关闭</p></div><input id="global_enabled" class="switch" type="checkbox"></div>
+    <div class="setting-row"><div><label for="horae_stop">停止 Horae 服务</label><p class="hint">随全局预设启用</p></div><input id="horae_stop" class="switch" type="checkbox" checked></div>
+  </div>
+  <div class="section-heading"><h2>全局目标</h2><span>配置值 · 非物理温度</span></div>
+  <div class="card temperature-group">
+<div class="temperature-control tone-shell">
+  <div class="temperature-head"><span class="temperature-tag">BAT</span><label for="batt_temp_mc">电池壳温</label><output id="batt_temp_mc_value" for="batt_temp_mc">34℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="batt_temp_mc" aria-label="电池壳温减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="batt_temp_mc" type="range" min="20" max="40" step="1" value="34"><div class="scale"><span>20℃</span><span>40℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="batt_temp_mc" aria-label="电池壳温增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-cpu">
+  <div class="temperature-head"><span class="temperature-tag">CPU</span><label for="cpu_temp_mc">CPU 温度映射</label><output id="cpu_temp_mc_value" for="cpu_temp_mc">40℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="cpu_temp_mc" aria-label="CPU 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="cpu_temp_mc" type="range" min="20" max="60" step="1" value="40"><div class="scale"><span>20℃</span><span>60℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="cpu_temp_mc" aria-label="CPU 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-gpu">
+  <div class="temperature-head"><span class="temperature-tag">GPU</span><label for="gpu_temp_mc">GPU 温度映射</label><output id="gpu_temp_mc_value" for="gpu_temp_mc">40℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="gpu_temp_mc" aria-label="GPU 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="gpu_temp_mc" type="range" min="20" max="60" step="1" value="40"><div class="scale"><span>20℃</span><span>60℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="gpu_temp_mc" aria-label="GPU 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-ddr">
+  <div class="temperature-head"><span class="temperature-tag">DDR</span><label for="ddr_temp_mc">DDR 温度映射</label><output id="ddr_temp_mc_value" for="ddr_temp_mc">40℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="ddr_temp_mc" aria-label="DDR 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="ddr_temp_mc" type="range" min="20" max="55" step="1" value="40"><div class="scale"><span>20℃</span><span>55℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="ddr_temp_mc" aria-label="DDR 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+</div>
+  <div class="preset-note"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info"/></svg><div><strong>充电独立预设优先</strong><p>结束充电后，根据全局开关决定是否继续应用。</p></div></div>
+</section>
+<section id="page-charge" role="tabpanel" aria-labelledby="tab-charge" hidden>
+  <div class="card switch-card"><div class="setting-row"><div><label for="charge_trigger">充电独立预设</label><p class="hint">充电或已充满时启用；拔线后按全局开关运行。</p></div><input id="charge_trigger" class="switch" type="checkbox" checked></div></div>
+  <div class="card horae-card"><div class="setting-row"><label for="charge_horae_enabled">充电 Horae 调整</label><input id="charge_horae_enabled" class="switch" type="checkbox" checked></div>
+    <div class="segmented solid" role="group" aria-label="充电 Horae 模式"><label><input name="charge_horae_mode" type="radio" value="charging"><span>充电时禁用</span></label><label><input name="charge_horae_mode" type="radio" value="smart" checked><span>智能调整</span></label></div>
+    <p class="hint horae-hint" id="horae-mode-hint">相机占用或未知时恢复，空闲稳定 3 秒后禁用。</p>
+  </div>
+  <div class="section-heading"><h2>充电目标</h2><span>配置值 · 非物理温度</span></div>
+  <div class="card temperature-group">
+<div class="temperature-control tone-shell">
+  <div class="temperature-head"><span class="temperature-tag">BAT</span><label for="charge_batt_temp_mc">电池壳温</label><output id="charge_batt_temp_mc_value" for="charge_batt_temp_mc">30℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="charge_batt_temp_mc" aria-label="电池壳温减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="charge_batt_temp_mc" type="range" min="20" max="40" step="1" value="30"><div class="scale"><span>20℃</span><span>40℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="charge_batt_temp_mc" aria-label="电池壳温增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-cpu">
+  <div class="temperature-head"><span class="temperature-tag">CPU</span><label for="charge_cpu_temp_mc">CPU 温度映射</label><output id="charge_cpu_temp_mc_value" for="charge_cpu_temp_mc">35℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="charge_cpu_temp_mc" aria-label="CPU 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="charge_cpu_temp_mc" type="range" min="20" max="60" step="1" value="35"><div class="scale"><span>20℃</span><span>60℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="charge_cpu_temp_mc" aria-label="CPU 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-gpu">
+  <div class="temperature-head"><span class="temperature-tag">GPU</span><label for="charge_gpu_temp_mc">GPU 温度映射</label><output id="charge_gpu_temp_mc_value" for="charge_gpu_temp_mc">35℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="charge_gpu_temp_mc" aria-label="GPU 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="charge_gpu_temp_mc" type="range" min="20" max="60" step="1" value="35"><div class="scale"><span>20℃</span><span>60℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="charge_gpu_temp_mc" aria-label="GPU 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+<div class="temperature-control tone-ddr">
+  <div class="temperature-head"><span class="temperature-tag">DDR</span><label for="charge_ddr_temp_mc">DDR 温度映射</label><output id="charge_ddr_temp_mc_value" for="charge_ddr_temp_mc">35℃</output></div>
+  <div class="slider-controls">
+    <button type="button" class="step-button" data-adjust="-1" data-target="charge_ddr_temp_mc" aria-label="DDR 温度映射减少1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button>
+    <div class="range-column"><input id="charge_ddr_temp_mc" type="range" min="20" max="55" step="1" value="35"><div class="scale"><span>20℃</span><span>55℃</span></div></div>
+    <button type="button" class="step-button" data-adjust="1" data-target="charge_ddr_temp_mc" aria-label="DDR 温度映射增加1℃"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button>
+  </div>
+</div>
+</div>
+</section>
+<section id="page-preferences" role="tabpanel" aria-labelledby="tab-preferences" hidden>
+  <div class="card preferences-card">
+    <div class="setting-row preference-choice"><div><h2>外观</h2><p class="hint" id="theme-hint">跟随系统</p></div><div class="segmented" role="group" aria-label="主题"><label><input type="radio" name="theme" value="light"><span>浅色</span></label><label><input type="radio" name="theme" value="dark"><span>深色</span></label><label><input type="radio" name="theme" value="system" checked><span>系统</span></label></div></div>
+    <div class="setting-row"><div><h2 id="dpi-label">界面 DPI</h2><p class="hint">仅缩放 WebUI · 即时保存</p></div><div class="dpi-controls" role="group" aria-labelledby="dpi-label"><button type="button" id="dpi-decrease" class="icon-button" aria-label="缩小界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="dpi-value" aria-live="polite">105%</output><button type="button" id="dpi-increase" class="icon-button" aria-label="放大界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button><button type="button" id="dpi-reset" class="dpi-reset" aria-label="恢复默认界面比例105%">默认</button></div></div>
+    <div class="setting-row preference-choice"><div><h2>写入模式</h2><p class="hint" id="write-mode-hint">默认使用事件驱动</p></div><div class="segmented solid" role="group" aria-label="温控写入模式"><label><input type="radio" name="write_mode" value="loop"><span>循环维护写入</span></label><label><input type="radio" name="write_mode" value="event" checked><span>事件驱动写入</span></label></div></div>
+    <div class="setting-row"><div><label for="detailed_logging">详细日志</label><p class="hint">默认关闭 · 按大小轮转保留</p></div><input id="detailed_logging" class="switch" type="checkbox"></div>
+    <p id="logging-error" class="hint error-text" hidden></p>
+  </div>
+  <div class="card diagnostic-card"><div class="card-heading"><div class="heading-title"><h2>运行诊断</h2><span class="small-badge" id="diagnostic-state">等待连接</span></div><button class="small-action backend" type="button" id="export"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg><span>导出</span></button></div>
+    <div class="runtime-stats"><div><strong id="diagnostic-round">—</strong><span>维护轮次</span></div><div><strong id="diagnostic-errors">—</strong><span>待重试</span></div><div><strong id="log-count">—</strong><span>最近记录</span></div></div>
+    <p class="hint diagnostic-counts" id="maintenance-counts">等待运行统计</p><p class="hint" id="export-result" role="status" hidden></p>
+  </div>
+  <div class="card diagnostics-panel">
+    <div class="diagnostic-tabs"><div role="tablist" aria-label="运行诊断内容"><button type="button" id="diagnostic-tab-logs" role="tab" aria-controls="log-content" aria-selected="true"><span>运行日志</span><span id="log-tab-count" class="tab-count">—</span></button><button type="button" id="diagnostic-tab-backends" role="tab" aria-controls="backend-content" aria-selected="false" tabindex="-1"><span>后端详情</span><span id="backend-tab-count" class="tab-count">—</span></button></div><button type="button" id="toggle-diagnostics" class="icon-button" aria-label="展开诊断面板" aria-expanded="false" aria-controls="log-content backend-content"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron"/></svg></button></div>
+    <div id="log-content" role="tabpanel" aria-labelledby="diagnostic-tab-logs" hidden>
+      <div class="panel-toolbar"><div class="filter-row" role="group" aria-label="日志筛选"><button type="button" class="filter-button" data-log-filter="all" aria-pressed="true"><span>全部</span><span class="filter-count">—</span></button><button type="button" class="filter-button" data-log-filter="error" aria-pressed="false"><span>异常</span></button><button type="button" class="filter-button" data-log-filter="config" aria-pressed="false"><span>配置</span></button><button type="button" class="filter-button" data-log-filter="camera" aria-pressed="false"><span>Horae</span></button></div><span class="hint" id="log-total">尚未加载</span><button type="button" class="icon-button backend" id="refresh-logs" aria-label="刷新运行日志"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button></div>
+      <div class="log-columns"><span>开机后</span><span>事件 / 摘要</span></div><div id="log-list" class="log-list"><p class="empty">等待加载日志</p></div><div class="panel-footer"><span id="log-detail-state">详细日志关闭</span><span>点选记录查看完整字段</span></div>
+    </div>
+    <div id="backend-content" role="tabpanel" aria-labelledby="diagnostic-tab-backends" hidden>
+      <div class="panel-toolbar"><div class="filter-row" role="group" aria-label="后端筛选"><button type="button" class="filter-button" data-backend-filter="all" aria-pressed="true"><span>全部</span><span class="filter-count">—</span></button><button type="button" class="filter-button" data-backend-filter="frequency" aria-pressed="false"><span>频率</span></button><button type="button" class="filter-button" data-backend-filter="temperature" aria-pressed="false"><span>温度</span></button><button type="button" class="filter-button" data-backend-filter="services" aria-pressed="false"><span>服务</span></button><button type="button" class="filter-button" data-backend-filter="cooling" aria-pressed="false"><span>冷却</span></button></div><button type="button" class="icon-button backend" id="refresh-backends" aria-label="刷新后端详情"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button></div><p class="hint" id="backend-note" hidden></p><div id="operations" class="backend-list"><p class="empty">等待加载后端</p></div>
+    </div>
+  </div>
+  <div class="card about-card"><span>关于</span><strong id="module-author" aria-label="作者">xiyunmn</strong><p class="version">1.0.0</p></div>
+</section>
+</form></main>
+<div class="savebar" id="savebar" hidden><p>有未保存的更改</p><div class="save-actions"><button class="secondary backend" id="discard" type="button">撤销</button><button class="primary backend" id="save" type="submit" form="settings">保存设置</button></div><p>步进 1℃ · 保存后应用</p></div>
+<nav class="nav" role="tablist" aria-label="主导航">
+<button type="button" id="tab-overview" role="tab" aria-controls="page-overview" aria-selected="true" tabindex="0"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pulse"/></svg><span>概览</span></button>
+<button type="button" id="tab-global" role="tab" aria-controls="page-global" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-thermo"/></svg><span>全局</span></button>
+<button type="button" id="tab-charge" role="tab" aria-controls="page-charge" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span>充电</span></button>
+<button type="button" id="tab-preferences" role="tab" aria-controls="page-preferences" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span>设置</span></button>
+</nav>
+</body></html>

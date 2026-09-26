@@ -1,0 +1,22 @@
+#[cfg(all(feature = "fixtures", target_os = "android"))]
+compile_error!("Fixture support must never be shipped on Android");
+pub mod camera;
+pub mod capabilities;
+pub mod command;
+pub mod config;
+pub mod control;
+pub mod cooling_events;
+pub mod discovery;
+pub mod events;
+pub mod hardware;
+pub mod maintenance;
+pub mod maintenance_events;
+pub mod runtime;
+pub mod storage;
+pub type Result<T> = std::result::Result<T, String>;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const ID: &str = env!("CG_ID");
+pub const NAME: &str = env!("CG_NAME");
+pub const AUTHOR: &str = env!("CG_AUTHOR");
+pub const MODULE: &str = concat!("/data/adb/modules/", env!("CG_ID"));
+pub const STATE: &str = concat!("/data/adb/", env!("CG_ID"));
