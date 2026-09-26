@@ -542,13 +542,24 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                     .as_ref()
                     .is_some_and(|m| !m.snapshot().permits_horae(now_ms()))
         });
+        if effective.enabled && h.capabilities().shell_slots.is_none() {
+            statuses.push(control::BackendStatus {
+                id: "shell_temp_capability".into(),
+                family: "shell".into(),
+                target: "/proc/shell-temp".into(),
+                desired: targets.battery.to_string(),
+                state: "unverified".into(),
+                detail: Some("shell_driver_unverified".into()),
+            });
+        }
         if c.detailed_logging && !due.is_empty() {
             let processed = now_ms();
             let records = due.iter().filter_map(|id| {
                 let op = ops.iter().find(|o| &o.id == id)?;
                 let state = statuses.iter().find(|s| &s.id == id);
                 let receipts = schedule.receipts(id);
-                let latency = receipts.and_then(|r| r.iter().filter_map(|e| e["received_ms"].as_u64()).min()).map(|ms| processed.saturating_sub(ms));
+                let checked = controller.verification(id).map_or(processed, |v| v.checked_ms);
+                let latency = receipts.and_then(|r| r.iter().filter_map(|e| e["received_ms"].as_u64()).min()).map(|ms| checked.saturating_sub(ms));
                 Some(json!({"id":id,"target":op.target,"sensor_type":op.sensor_type,"desired":op.desired,
                     "trigger":schedule.pending_cause(id),"notifications":receipts,"notification_to_check_ms":latency,
                     "pure_event":schedule.is_event(id) && schedule.pending_cause(id)!=Some("retry") && state.is_some_and(|s|s.state=="applied"),"result":state,"verification":controller.verification(id)}))
@@ -556,6 +567,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             detailed_error = detail_log(h, "maintenance_decisions", json!({"round":controller.rounds,"profile":profile,"write_mode":c.write_mode,"operations":records})).err();
         }
         schedule.completed(&due, now_ms());
+        schedule.set_repair_deadlines(controller.pending_repairs());
         if let Some(listener) = &mut controls {
             listener.observe_statuses(h, &statuses);
         }
@@ -583,13 +595,17 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 let mut v = json!(s);
                 let op = ops.iter().find(|o| o.id == s.id);
                 let retrying = matches!(s.state.as_str(), "retrying" | "restore_pending");
+                let blocked = s.state == "unverified";
+                let repair_wait = s.state == "repair_wait";
                 let event = schedule.is_event(&s.id) && !retrying;
                 let dormant = matches!(s.id.as_str(), "omrg" | "migt" | control::ORMS)
                     && matches!(s.state.as_str(), "unavailable" | "unsupported");
                 let hybrid = op.is_some_and(|o| controls.as_ref().is_some_and(|l| l.hybrid(o)));
                 let verify =
                     c.write_mode == WriteMode::Event && op.is_some_and(control::can_verify);
-                v["maintenance_mode"] = json!(if dormant {
+                v["maintenance_mode"] = json!(if blocked {
+                    "blocked"
+                } else if dormant {
                     "dormant"
                 } else if event {
                     "event"
@@ -598,12 +614,12 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 } else {
                     "loop"
                 });
-                v["periodic_interval_ms"] = if event || dormant {
+                v["periodic_interval_ms"] = if event || dormant || blocked {
                     Value::Null
                 } else {
                     json!(controller.interval_secs() * 1000)
                 };
-                v["write_policy"] = json!(if dormant {
+                v["write_policy"] = json!(if dormant || blocked {
                     "none"
                 } else if event || verify {
                     "on_drift"
@@ -672,6 +688,17 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                         "文件事件触发回读并按需修复；正常时无周期核验，监听失效时局部恢复周期核验"
                     );
                 }
+                if repair_wait {
+                    v["maintenance_reason"] =
+                        json!("已检测漂移，等待修复窗口；截止时间到达后自动核验，无需新的外部事件");
+                } else if blocked {
+                    v["maintenance_reason"] =
+                        json!("驱动槽位尚未验证，暂停 shell-temp 写入；其他后端独立运行");
+                }
+                if op.is_some_and(|o| o.method == control::Method::Shell) {
+                    v["capability_verified"] = json!(true);
+                    v["readback_semantics"] = json!("maximum_of_slots_not_individual_values");
+                }
                 v["last_maintenance_ms"] = json!(schedule.last_checked(&s.id));
                 v["last_trigger"] = json!(schedule.last_trigger(&s.id));
                 v
@@ -686,7 +713,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             last_modes = Some(modes);
         }
         let mut snapshot = json!({"schema":3,"version":crate::VERSION,"pid":me.pid,"start_ticks":me.start_ticks,"boot_id":controller.journal.boot_id,
-            "phase":if failures>0{"partial"}else if profile=="idle"{"idle"}else{"running"},"sampled_ms":now_ms(),"profile":profile,"config":c,
+            "phase":if failures>0{"partial"}else if statuses.iter().any(|s|s.state=="unverified"){"degraded"}else if statuses.iter().any(|s|s.state=="repair_wait"){"repair_wait"}else if profile=="idle"{"idle"}else{"running"},"sampled_ms":now_ms(),"profile":profile,"config":c,
             "camera":monitor.as_ref().map(Monitor::snapshot),"smart_horae":smart,
             "config_error":config_error,"charge_status":charge,"targets":targets,"round":controller.rounds,"interval_secs":interval,
             "charge_listener":if events.power_available(){"uevent"}else{"unavailable"},"charge_listener_error":events.power_error,

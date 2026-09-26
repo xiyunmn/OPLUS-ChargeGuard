@@ -4,10 +4,10 @@ const $=id=>document.getElementById(id);
 const pages={overview:document.title,global:'全局温控',charge:'充电预设',preferences:'设置'};
 const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge_batt_temp_mc','charge_cpu_temp_mc','charge_gpu_temp_mc','charge_ddr_temp_mc'];
 const counts=new Intl.NumberFormat('en-US');
-const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复中'};
+const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复中',repair_wait:'等待修复窗口',unverified:'能力待验证'};
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
-const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在'};
+const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
 let requestEpoch=0,pollGeneration=0,pollTimer=null,pollingActive=false,viewOpen=true;
 let config=null,dirty=false,busy=false,refreshing=false,loadingLogs=false,loadingNodes=false;
 let currentPage='overview',lastStatus=null,nodeIdentity='',nodeFilter='all',logFilter='all',backendFilter='all';
@@ -124,8 +124,8 @@ function render(data){
   lastStatus=data;
   if(data.device_info)setText($('oem-version'),[data.device_info.model,data.device_info.oem_version].filter(Boolean).join(' · '));
   const s=data.status||{},active=data.worker_alive||data.guardian_alive,fresh=!!data.fresh,idle=s.profile==='idle';
-  const phase=fresh?(idle?'待机观察':s.phase==='partial'?'部分重试':'运行中'):data.worker_alive?'等待更新':data.guardian_alive?'等待重启':'已停止';
-  const tone=fresh&&!idle?(s.phase==='partial'?'warn':'good'):active?'warn':'muted';
+  const phase=fresh?(idle?'待机观察':s.phase==='partial'?'部分重试':s.phase==='degraded'?'兼容性待验证':s.phase==='repair_wait'?'等待修复':'运行中'):data.worker_alive?'等待更新':data.guardian_alive?'等待重启':'已停止';
+  const tone=fresh&&!idle?(['partial','degraded','repair_wait'].includes(s.phase)?'warn':'good'):active?'warn':'muted';
   setText($('core-state'),phase);$('core-badge').dataset.tone=tone;paintState($('diagnostic-state'),phase,tone);
   $('start').hidden=!!active;$('stop').hidden=!active;
   setText($('freshness'),number(data.age_ms)==null?'尚无记录':(data.age_ms/1000).toFixed(1)+' 秒前更新');
@@ -146,9 +146,9 @@ function render(data){
   for(const key of ['battery','cpu','gpu','ddr'])setText($('target-'+key),!idle&&number(s.targets?.[key])!=null?(s.targets[key]/1000)+'°':'—');
   const chips=[];
   for(const [family,label] of [['services','服务'],['shell','壳温'],['cpu','CPU'],['gpu','GPU'],['ddr','DDR'],['frequency','频率'],['cooling','Cooling']]){
-    const group=ops.filter(o=>o.family===family),applied=group.filter(o=>o.state==='applied').length,failed=group.some(o=>['retrying','restore_pending'].includes(o.state));
+    const group=ops.filter(o=>o.family===family),applied=group.filter(o=>o.state==='applied').length,failed=group.some(o=>['retrying','restore_pending','unverified','repair_wait'].includes(o.state));
     const tag=element('span',label+' '+(applied||'—'),'backend-chip tone-'+family+' '+(failed?'warn':applied?'on':''));
-    tag.title=failed?'存在待重试操作':applied?'已应用 '+applied+' / '+group.length+' 项':'当前未应用';chips.push(tag);
+    tag.title=failed?'存在待验证或待修复操作':applied?'已应用 '+applied+' / '+group.length+' 项':'当前未应用';chips.push(tag);
   }
   $('groups').replaceChildren(...chips);
   const identity=[s.boot_id,s.pid,s.profile,s.config?.revision].join(':');
@@ -177,8 +177,8 @@ function backendGroup(op){
   if(names[op.family])return [op.family,names[op.family],op.family];
   return [op.id||op.target,op.id||op.target||'其他后端',op.family||'other'];
 }
-function stateText(op){return op.state==='applied'&&['write_accepted_no_readback','write_accepted_readback_masked_by_switch'].includes(op.detail)?'已写入':stateNames[op.state]||op.state||'未知';}
-function stateClass(ops){return ops.some(o=>['retrying','restore_pending'].includes(o.state))?'warn':ops.every(o=>o.state==='applied')?'good':'';}
+function stateText(op){return op.state==='applied'&&['write_accepted_no_readback','write_accepted_aggregate_readback','write_accepted_readback_masked_by_switch'].includes(op.detail)?'已写入':stateNames[op.state]||op.state||'未知';}
+function stateClass(ops){return ops.some(o=>['retrying','restore_pending','repair_wait','unverified'].includes(o.state))?'warn':ops.every(o=>o.state==='applied')?'good':'';}
 function groupMode(group){
   if(group.items.every(o=>o.state==='restored'))return '已恢复';
   if(group.items.every(o=>!o.maintenance_mode))return group.items.some(o=>o.state==='restore_pending')?'等待恢复':'—';
@@ -198,18 +198,19 @@ function paintBackendNode(record,op,multiple){
   setText(record.state,stateText(op));record.state.className='backend-state '+stateClass([op]);setText(record.path,op.target||op.id);
   const pairs=[
     [op.can_verify?'目标 / 回读':'目标值',op.can_verify?String(op.desired??'—')+' / '+String(op.observed_after??'—'):String(op.desired??'—')],
-    ['回读',op.can_verify===false?'无法完整核验':{matched:'符合目标',mismatched:'与目标不符',unreadable:'无法读取',not_checked:'未核验'}[op.verification]||'—'],
+    ['回读',op.can_verify===false?'无法完整核验':{matched:'符合目标',repaired:'修复后已核验',mismatched:'与目标不符',unreadable:'无法读取',not_checked:'未核验'}[op.verification]||'—'],
     ['最近处理',uptime(op.last_maintenance_ms)],
     ['本次处理',typeof op.write_performed==='boolean'?(op.write_performed?'已执行写入':'未执行写入'):'—']
   ];
+  if(Number.isFinite(op.retry_after_ms))pairs.push(['修复截止（开机后）',uptime(op.retry_after_ms)]);
   const fields=[];
-  for(const [key,value] of pairs){let field=record.pairs.get(key);if(!field){const el=element('div'),dt=element('dt',key),dd=element('dd');el.append(dt,dd);field={el,dd};record.pairs.set(key,field);}setText(field.dd,value);field.dd.classList.toggle('good',key==='回读'&&op.verification==='matched');fields.push(field.el);}
+  for(const [key,value] of pairs){let field=record.pairs.get(key);if(!field){const el=element('div'),dt=element('dt',key),dd=element('dd');el.append(dt,dd);field={el,dd};record.pairs.set(key,field);}setText(field.dd,value);field.dd.classList.toggle('good',key==='回读'&&['matched','repaired'].includes(op.verification));fields.push(field.el);}
   syncChildren(record.values,fields);
   const checks=[['verification_checks','核验'],['repair_writes','修复'],['skipped_writes','省略']].filter(([key])=>Number.isFinite(op[key])).map(([key,label])=>element('span',label+' '+count(op[key])+' 次'));
   record.counters.replaceChildren(...checks);record.counters.hidden=!checks.length;
   const source={property_wait:'服务状态通知',node_inotify:'inotify','mount_poll+inotify':'挂载与文件通知','thermal_tracepoint+thermal_netlink+inotify':'thermal / netlink / inotify'}[op.event_source]||op.event_source;
   const reason=[source,op.maintenance_reason].filter(Boolean).join(' · ');setText(record.reason,reason);record.reason.hidden=!reason;
-  const detail={write_accepted_no_readback:'接口写入已完成；该接口不提供可比对的回读。',write_accepted_readback_masked_by_switch:'写入已完成；显示值受禁限开关影响，不能验证内部请求。'}[op.detail]||op.detail;
+  const detail={node_repair_rate_limited:'已检测到漂移；到修复截止时间会自动再次核验。',shell_driver_unverified:'尚未匹配经过验证的驱动身份，shell-temp 暂停写入。',restore_shell_capability_unverified:'原驱动能力未确认，恢复记录保留，暂不写入恢复值。',write_accepted_aggregate_readback:'槽位已验证有效，写入已接受；回读仅是所有槽位的最大值，不能逐槽核验。',write_accepted_no_readback:'接口写入已完成；该接口不提供可比对的回读。',write_accepted_readback_masked_by_switch:'写入已完成；显示值受禁限开关影响，不能验证内部请求。'}[op.detail]||op.detail;
   setText(record.detail,detail);record.detail.hidden=!detail;setText(record.pre,JSON.stringify(op,null,2));
 }
 function renderBackends(data){

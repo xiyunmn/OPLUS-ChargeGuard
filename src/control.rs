@@ -69,6 +69,8 @@ pub struct Verification {
     pub verification_checks: u64,
     pub repair_writes: u64,
     pub skipped_writes: u64,
+    pub retry_after_ms: Option<u64>,
+    pub last_write_error: Option<String>,
 }
 /// State-bearing interfaces, excluding masked game_opt displays and shell/emulation.
 pub fn can_verify(op: &Operation) -> bool {
@@ -191,7 +193,7 @@ pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Op
             None,
         ));
     }
-    for i in 0..h.capabilities().shell_slots.unwrap_or(6) {
+    for i in 0..h.capabilities().shell_slots.unwrap_or(0) {
         ops.push(write(
             &format!("shell_temp_{i}"),
             "shell",
@@ -314,6 +316,21 @@ impl Controller {
     pub fn verification(&self, id: &str) -> Option<&Verification> {
         self.verification.get(id)
     }
+    pub fn pending_repairs(&self) -> BTreeMap<String, u64> {
+        self.statuses
+            .iter()
+            .filter_map(|(id, status)| {
+                matches!(status.state.as_str(), "repair_wait" | "retrying")
+                    .then(|| {
+                        self.verification
+                            .get(id)
+                            .and_then(|info| info.retry_after_ms)
+                            .map(|deadline| (id.clone(), deadline))
+                    })
+                    .flatten()
+            })
+            .collect()
+    }
     pub fn verification_counters(&self) -> serde_json::Value {
         serde_json::json!({
             "verification_checks":self.verification.values().map(|v|v.verification_checks).sum::<u64>(),
@@ -389,6 +406,7 @@ impl Controller {
             verification.verification = "not_checked".into();
             verification.observed_before = None;
             verification.observed_after = None;
+            verification.retry_after_ms = None;
             verification.checked_ms = crate::runtime::now_ms();
             if release_horae() {
                 if self.journal.entries.contains_key("horae") {
@@ -400,6 +418,14 @@ impl Controller {
             }
             let result = (|| -> Result<&'static str> {
                 validate_operation(op)?;
+                if op.method == Method::Shell {
+                    let Some(slots) = h.capabilities().shell_slots else {
+                        return Ok("unverified");
+                    };
+                    if shell_index(op).is_none_or(|i| i >= slots) {
+                        return Err("shell_slot_not_supported".into());
+                    }
+                }
                 if op.method == Method::Service {
                     if h.service_state(&op.target)?.is_none() {
                         return Ok("unsupported");
@@ -494,16 +520,22 @@ impl Controller {
                             verification.observed_after = Some(current);
                             verification.verification = "matched".into();
                             verification.skipped_writes += 1;
+                            verification.last_write_error = None;
                             return Ok("applied");
                         }
                         verification.verification = "mismatched".into();
-                        if previously_owned
-                            && self
+                        if previously_owned {
+                            if let Some(deadline) = self
                                 .repair_after
                                 .get(&op.id)
-                                .is_some_and(|deadline| crate::runtime::now_ms() < *deadline)
-                        {
-                            return Err("node_repair_rate_limited".into());
+                                .filter(|deadline| crate::runtime::now_ms() < **deadline)
+                            {
+                                verification.retry_after_ms = Some(*deadline);
+                                if let Some(error) = &verification.last_write_error {
+                                    return Err(error.clone());
+                                }
+                                return Ok("repair_wait");
+                            }
                         }
                     }
                     let write_result = h.write(&op.target, &op.desired);
@@ -515,6 +547,10 @@ impl Controller {
                             op.id.clone(),
                             crate::runtime::now_ms().saturating_add(self.interval_secs() * 1000),
                         );
+                    }
+                    verification.last_write_error = write_result.as_ref().err().cloned();
+                    if write_result.is_err() {
+                        verification.retry_after_ms = self.repair_after.get(&op.id).copied();
                     }
                     write_result?;
                     verification.write_performed = true;
@@ -531,8 +567,13 @@ impl Controller {
                                     crate::runtime::now_ms()
                                         .saturating_add(self.interval_secs() * 1000),
                                 );
+                                verification.retry_after_ms =
+                                    self.repair_after.get(&op.id).copied();
                             }
                             return Err("node_readback_mismatch".into());
+                        }
+                        if can_verify(op) {
+                            verification.verification = "repaired".into();
                         }
                     }
                 }
@@ -541,11 +582,15 @@ impl Controller {
             let (state, detail) = match result {
                 Ok(s) => (
                     s.to_owned(),
-                    if s == "applied" && op.target.starts_with("/proc/game_opt/cpu_") {
+                    if s == "repair_wait" {
+                        Some("node_repair_rate_limited".into())
+                    } else if s == "unverified" {
+                        Some("shell_driver_unverified".into())
+                    } else if s == "applied" && op.method == Method::Shell {
+                        Some("write_accepted_aggregate_readback".into())
+                    } else if s == "applied" && op.target.starts_with("/proc/game_opt/cpu_") {
                         Some("write_accepted_readback_masked_by_switch".into())
-                    } else if s == "applied"
-                        && matches!(op.method, Method::Shell | Method::Emulation)
-                    {
+                    } else if s == "applied" && op.method == Method::Emulation {
                         Some("write_accepted_no_readback".into())
                     } else {
                         None
@@ -626,6 +671,9 @@ impl Controller {
                         _ => return Err("service_restore_original_unknown".into()),
                     },
                     _ => {
+                        if op.method == Method::Shell && h.capabilities().shell_slots.is_none() {
+                            return Err("restore_shell_capability_unverified".into());
+                        }
                         // The verified loaded driver rejects these indexes before touching memory.
                         // This also retires rc.4 records without issuing another invalid reset write.
                         if op.method == Method::Shell
@@ -639,6 +687,12 @@ impl Controller {
                             })
                         {
                             return Ok(());
+                        }
+                        if op.method == Method::Shell
+                            && shell_index(op)
+                                .is_none_or(|i| i >= h.capabilities().shell_slots.unwrap_or(0))
+                        {
+                            return Err("restore_shell_slot_not_supported".into());
                         }
                         if !h.present(&op.target)? {
                             return Err("restore_target_missing".into());
@@ -718,6 +772,16 @@ impl Controller {
 }
 fn apply_service(h: &Hardware, name: &str, running: bool) -> Result<()> {
     h.service(name, running)
+}
+fn shell_index(op: &Operation) -> Option<usize> {
+    let index = op.id.strip_prefix("shell_temp_")?.parse::<usize>().ok()?;
+    let written = op
+        .desired
+        .split_whitespace()
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+    (index == written).then_some(index)
 }
 fn validate_operation(op: &Operation) -> Result<()> {
     let t = &op.target;

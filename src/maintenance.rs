@@ -17,6 +17,7 @@ pub struct Schedule {
     dormant: BTreeSet<String>,
     next_tick: u64,
     settle: BTreeMap<String, u64>,
+    repair_deadlines: BTreeMap<String, u64>,
     receipts: BTreeMap<String, Vec<serde_json::Value>>,
 }
 impl Schedule {
@@ -44,6 +45,8 @@ impl Schedule {
         self.event_ids.retain(|id| wanted.contains(id.as_str()));
         self.dormant.retain(|id| wanted.contains(id.as_str()));
         self.settle.retain(|id, _| wanted.contains(id.as_str()));
+        self.repair_deadlines
+            .retain(|id, _| wanted.contains(id.as_str()));
         self.receipts.retain(|id, _| wanted.contains(id.as_str()));
         self.operations = ops.to_vec();
         self.mode = Some(mode);
@@ -106,6 +109,12 @@ impl Schedule {
         mut event_ids: BTreeSet<String>,
         statuses: &[BackendStatus],
     ) -> BTreeSet<String> {
+        for (id, deadline) in &self.repair_deadlines {
+            if now >= *deadline {
+                self.pending
+                    .insert(id.clone(), ("repair_window_elapsed", true));
+            }
+        }
         if self.mode != Some(WriteMode::Event) {
             event_ids.clear();
             self.settle.clear();
@@ -183,6 +192,10 @@ impl Schedule {
             self.receipts.remove(id);
         }
     }
+    pub fn set_repair_deadlines(&mut self, mut deadlines: BTreeMap<String, u64>) {
+        deadlines.retain(|id, _| self.operations.iter().any(|op| &op.id == id));
+        self.repair_deadlines = deadlines;
+    }
     pub fn rediscover(&mut self, include_services: bool) {
         for id in &self.dormant {
             if include_services || id != crate::control::ORMS {
@@ -208,6 +221,13 @@ impl Schedule {
         self.next_tick
             .min(pending)
             .min(self.settle.values().copied().min().unwrap_or(u64::MAX))
+            .min(
+                self.repair_deadlines
+                    .values()
+                    .copied()
+                    .min()
+                    .unwrap_or(u64::MAX),
+            )
             .saturating_sub(now)
     }
     pub fn last_checked(&self, id: &str) -> Option<u64> {
@@ -405,5 +425,42 @@ mod tests {
         schedule.completed(&due, 120_000);
         assert!(schedule.due(120_001, 3000, BTreeSet::new(), &[]).is_empty());
         assert_eq!(schedule.wait_ms(120_001, 3000), 2999);
+    }
+
+    #[test]
+    fn drift_wait_uses_original_deadline_without_another_external_event() {
+        let ops = [op("bouncing", "frequency", Method::Write)];
+        let mut schedule = initialized(WriteMode::Event, &ops);
+        let event_ids = ids(&["bouncing"]);
+        let due = schedule.due(1001, 3000, event_ids.clone(), &[]);
+        schedule.completed(&due, 1001);
+        // A drift arrived near the end of the write cooldown. Checking it must not
+        // postpone repair for another full interval from the time of this check.
+        notify(&mut schedule, &["bouncing"], "node_file_event");
+        let due = schedule.due(3800, 3000, event_ids.clone(), &[]);
+        schedule.completed(&due, 3800);
+        schedule.set_repair_deadlines(BTreeMap::from([("bouncing".into(), 4000)]));
+        assert_eq!(schedule.wait_ms(3800, 3000), 200);
+        assert!(schedule.due(3999, 3000, event_ids.clone(), &[]).is_empty());
+        let due = schedule.due(4000, 3000, event_ids.clone(), &[]);
+        assert_eq!(due, event_ids);
+        assert_eq!(
+            schedule.pending_cause("bouncing"),
+            Some("repair_window_elapsed")
+        );
+        schedule.completed(&due, 4000);
+        schedule.set_repair_deadlines(BTreeMap::new());
+        assert_eq!(schedule.wait_ms(4001, 3000), u64::MAX - 4001);
+        assert!(schedule.due(9000, 3000, event_ids, &[]).is_empty());
+    }
+
+    #[test]
+    fn plan_removal_cancels_a_pending_repair_deadline() {
+        let ops = [op("bouncing", "frequency", Method::Write)];
+        let mut schedule = initialized(WriteMode::Event, &ops);
+        schedule.set_repair_deadlines(BTreeMap::from([("bouncing".into(), 4000)]));
+        schedule.set_plan(WriteMode::Event, &[]);
+        assert!(schedule.due(5000, 3000, BTreeSet::new(), &[]).is_empty());
+        assert!(schedule.repair_deadlines.is_empty());
     }
 }
