@@ -40,6 +40,7 @@
 !/rust-toolchain.toml
 !/src/
 !/src/camera.rs
+!/src/browser.rs
 !/src/capabilities.rs
 !/src/command.rs
 !/src/config.rs

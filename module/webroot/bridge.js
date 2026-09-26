@@ -1,7 +1,7 @@
 /* Original minimal adapter for KernelSU's documented exec bridge; no remote JS. */
 (function(root){'use strict';
   const executable='/data/adb/modules/charge_guard/bin/cg';
-  const verbs=new Set(['ui-status','device-info','logs','stop','status','thermal-nodes','config','pause','recover','start','arm','export','diagnose','version']);
+  const verbs=new Set(['open-repository','open-author','ui-status','device-info','logs','stop','status','thermal-nodes','config','pause','recover','start','arm','export','diagnose','version']);
   let sequence=0;
   function available(){return !!(root.ksu && typeof root.ksu.exec==='function');}
   function command(verb,payload){

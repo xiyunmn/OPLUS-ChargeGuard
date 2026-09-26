@@ -190,24 +190,44 @@ pub fn configure(h: &Hardware, payload: &str) -> Result<Value> {
     }
     Ok(json!({"saved_revision":ch.config.revision,"config":ch.config}))
 }
-fn detail_log(h: &Hardware, event: &str, detail: Value) -> Result<()> {
+fn event_record(event: &str, detail: Value) -> Value {
     let unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .ok();
-    storage::append_rotating(
-        &h.state(),
-        "detail.jsonl",
-        &json!({"event":event,"boottime_ms":now_ms(),"unix_ms":unix_ms,"worker_pid":std::process::id(),"version":crate::VERSION,"detail":detail}),
-        524288,
-        4,
-    )
+    json!({"event":event,"boottime_ms":now_ms(),"unix_ms":unix_ms,"detail":detail})
+}
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn records_capture_wall_clock_without_replacing_monotonic_time() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let detail = json!({"profile":"charging"});
+        let record = event_record("profile_changed", detail.clone());
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let stamp = record["unix_ms"].as_u64().unwrap();
+        assert!((before..=after).contains(&stamp));
+        assert!(record["boottime_ms"].as_u64().unwrap() <= now_ms());
+        assert_eq!(record["event"], "profile_changed");
+        assert_eq!(record["detail"], detail);
+    }
+}
+fn detail_log(h: &Hardware, event: &str, detail: Value) -> Result<()> {
+    let mut record = event_record(event, detail);
+    record["worker_pid"] = json!(std::process::id());
+    record["version"] = json!(crate::VERSION);
+    storage::append_rotating(&h.state(), "detail.jsonl", &record, 524288, 4)
 }
 fn log(h: &Hardware, event: &str, detail: Value) {
-    let _ = storage::log(
-        &h.state(),
-        &json!({"boottime_ms":now_ms(),"event":event,"detail":detail}),
-    );
+    let _ = storage::log(&h.state(), &event_record(event, detail));
 }
 fn spawn_role(h: &Hardware, role: &str) -> Result<std::process::Child> {
     let p = h.state().join(format!("{role}.log"));
@@ -1112,6 +1132,7 @@ pub fn execute(args: &[String]) -> Result<Value> {
         "diagnose" => diagnose(&h),
         "device-info" => Ok(device_info(&h)),
         "logs" => logs(&h),
+        "open-repository" | "open-author" => crate::browser::open(verb),
         "thermal-nodes" => {
             h.control_namespace()?;
             Ok(json!({"nodes":node_views(&h,&Controller::load(&h)?),"sampled_ms":now_ms()}))

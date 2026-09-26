@@ -24,6 +24,9 @@
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M6 12h12m-6-6v12"/></symbol>
+  <symbol id="i-repository" viewBox="0 0 24 24"><path d="M5 3h14v18H6a3 3 0 0 1 0-6h13M5 3v12M9 7h6M9 10h4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7M21 3l-11 11M10 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6"/></symbol>
 </defs></svg>
 <header><div class="header-inner"><div class="header-copy"><h1 id="page-title">OPLUS 充电温控</h1><p class="subtitle" id="oem-version">读取系统版本…</p></div><span id="core-badge" class="status-badge" data-tone="muted"><i class="status-dot"></i><span id="core-state">连接中</span></span></div></header>
 <main id="content"><div id="message" class="notice" role="status" hidden></div><form id="settings">
@@ -152,13 +155,25 @@
     <div class="diagnostic-tabs"><div role="tablist" aria-label="运行诊断内容"><button type="button" id="diagnostic-tab-logs" role="tab" aria-controls="log-content" aria-selected="true"><span>运行日志</span><span id="log-tab-count" class="tab-count">—</span></button><button type="button" id="diagnostic-tab-backends" role="tab" aria-controls="backend-content" aria-selected="false" tabindex="-1"><span>后端详情</span><span id="backend-tab-count" class="tab-count">—</span></button></div><button type="button" id="toggle-diagnostics" class="icon-button" aria-label="展开诊断面板" aria-expanded="false" aria-controls="log-content backend-content"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chevron"/></svg></button></div>
     <div id="log-content" role="tabpanel" aria-labelledby="diagnostic-tab-logs" hidden>
       <div class="panel-toolbar"><div class="filter-row" role="group" aria-label="日志筛选"><button type="button" class="filter-button" data-log-filter="all" aria-pressed="true"><span>全部</span><span class="filter-count">—</span></button><button type="button" class="filter-button" data-log-filter="error" aria-pressed="false"><span>异常</span></button><button type="button" class="filter-button" data-log-filter="config" aria-pressed="false"><span>配置</span></button><button type="button" class="filter-button" data-log-filter="camera" aria-pressed="false"><span>Horae</span></button></div><span class="hint" id="log-total">尚未加载</span><button type="button" class="icon-button backend" id="refresh-logs" aria-label="刷新运行日志"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button></div>
-      <div class="log-columns"><span>开机后</span><span>事件 / 摘要</span></div><div id="log-list" class="log-list"><p class="empty">等待加载日志</p></div><div class="panel-footer"><span id="log-detail-state">详细日志关闭</span><span>点选记录查看完整字段</span></div>
+      <div class="log-columns"><span>系统时间</span><span>事件 / 摘要</span></div><div id="log-list" class="log-list"><p class="empty">等待加载日志</p></div><div class="panel-footer"><span id="log-detail-state">详细日志关闭</span><span>点选记录查看完整字段</span></div>
     </div>
     <div id="backend-content" role="tabpanel" aria-labelledby="diagnostic-tab-backends" hidden>
       <div class="panel-toolbar"><div class="filter-row" role="group" aria-label="后端筛选"><button type="button" class="filter-button" data-backend-filter="all" aria-pressed="true"><span>全部</span><span class="filter-count">—</span></button><button type="button" class="filter-button" data-backend-filter="frequency" aria-pressed="false"><span>频率</span></button><button type="button" class="filter-button" data-backend-filter="temperature" aria-pressed="false"><span>温度</span></button><button type="button" class="filter-button" data-backend-filter="services" aria-pressed="false"><span>服务</span></button><button type="button" class="filter-button" data-backend-filter="cooling" aria-pressed="false"><span>冷却</span></button></div><button type="button" class="icon-button backend" id="refresh-backends" aria-label="刷新后端详情"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg></button></div><p class="hint" id="backend-note" hidden></p><div id="operations" class="backend-list"><p class="empty">等待加载后端</p></div>
     </div>
   </div>
-  <div class="card about-card"><span>关于</span><a href="https://github.com/xiyunmn/OPLUS-ChargeGuard" target="_blank" rel="noopener noreferrer" aria-label="项目仓库（GitHub）">仓库</a><a href="https://github.com/xiyunmn" target="_blank" rel="noopener noreferrer" aria-label="作者主页：xiyunmn"><strong id="module-author" aria-label="作者">xiyunmn</strong></a><p class="version">1.0.0</p></div>
+  <div class="card about-card">
+    <div class="about-heading"><h2>关于</h2><p class="version">1.0.0</p></div>
+    <button type="button" class="about-link" data-browser-command="open-repository" aria-label="使用系统浏览器打开项目仓库">
+      <span class="about-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-repository"/></svg></span>
+      <span class="about-copy"><small>仓库</small><strong>OPLUS-ChargeGuard</strong></span>
+      <svg class="icon about-external" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-external"/></svg>
+    </button>
+    <button type="button" class="about-link" data-browser-command="open-author" aria-label="使用系统浏览器打开作者主页">
+      <span class="about-icon author-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-user"/></svg></span>
+      <span class="about-copy"><small>作者</small><strong id="module-author" aria-label="作者">xiyunmn</strong></span>
+      <svg class="icon about-external" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-external"/></svg>
+    </button>
+  </div>
 </section>
 </form></main>
 <div class="savebar" id="savebar" hidden><p>有未保存的更改</p><div class="save-actions"><button class="secondary backend" id="discard" type="button">撤销</button><button class="primary backend" id="save" type="submit" form="settings">保存设置</button></div><p>步进 1℃ · 保存后应用</p></div>

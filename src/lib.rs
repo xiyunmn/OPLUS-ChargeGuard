@@ -1,5 +1,6 @@
 #[cfg(all(feature = "fixtures", target_os = "android"))]
 compile_error!("Fixture support must never be shipped on Android");
+pub mod browser;
 pub mod camera;
 pub mod capabilities;
 pub mod command;

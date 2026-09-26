@@ -259,6 +259,15 @@ function logSummary(e){
     default:return JSON.stringify(d);
   }
 }
+function logTime(entry){
+  const time=element('time'),ms=number(entry.unix_ms),date=ms===null?null:new Date(ms);
+  if(!date||!Number.isFinite(date.getTime())){time.textContent='未记录';time.title='此记录未包含系统时间';return time;}
+  const pad=value=>String(value).padStart(2,'0');
+  const day=pad(date.getMonth()+1)+'/'+pad(date.getDate());
+  const clock=[date.getHours(),date.getMinutes(),date.getSeconds()].map(pad).join(':');
+  time.dateTime=date.toISOString();time.title=date.getFullYear()+'/'+day+' '+clock;
+  time.setAttribute('aria-label',time.title);time.append(element('span',day),element('strong',clock));return time;
+}
 function renderLogs(){
   const list=$('log-list'),scroll=list.scrollTop,occurrences=new Map(),children=[],wanted=new Set();
   for(const e of logEntries.slice().reverse()){
@@ -269,7 +278,7 @@ function renderLogs(){
     if(!record){
       record=element('details',null,'log-record tone-'+logTone(e));const head=element('summary'),copy=element('span',null,'log-copy');
       copy.append(element('strong',logNames[e.event]||e.event||'运行记录'),element('small',logSummary(e)));
-      head.append(element('time',uptime(e.boottime_ms)),element('span',null,'log-dot'),copy,icon('next'));
+      head.append(logTime(e),element('span',null,'log-dot'),copy,icon('next'));
       record.append(head,element('pre',JSON.stringify(e,null,2)));logRecords.set(key,record);
     }
     children.push(record);
@@ -372,6 +381,16 @@ function displayScale(value){
 $('dpi-decrease').onclick=()=>displayScale(CGDisplay.get()-5);
 $('dpi-increase').onclick=()=>displayScale(CGDisplay.get()+5);
 $('dpi-reset').onclick=()=>displayScale(105);displayScale();
+let openingBrowser=false;
+for(const button of document.querySelectorAll('[data-browser-command]'))button.onclick=async()=>{
+  if(openingBrowser)return;
+  if(!CG.available()){message('当前宿主未提供系统浏览器调用接口',true);return;}
+  openingBrowser=true;
+  const buttons=document.querySelectorAll('[data-browser-command]');for(const node of buttons)node.disabled=true;
+  try{await CG.call(button.dataset.browserCommand);}
+  catch(error){message('系统浏览器打开失败：'+error.message,true);}
+  finally{openingBrowser=false;for(const node of buttons)node.disabled=false;}
+};
 for(const verb of ['start','stop','export'])$(verb).onclick=()=>action(verb);
 for(const tab of ['logs','backends'])$('diagnostic-tab-'+tab).onclick=()=>diagnostics(tab);
 tabKeys(['logs','backends'].map(key=>$('diagnostic-tab-'+key)),index=>diagnostics(index?'backends':'logs'));
