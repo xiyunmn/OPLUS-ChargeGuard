@@ -2,7 +2,6 @@
 
 面向 OPLUS 设备的充电温控模块，提供 Rust 控制核心与 WebUI。
 
-**版本：v1.0.0 · 模块 ID：`charge_guard`**
 
 ## 功能
 
