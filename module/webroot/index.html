@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#f3f6fc" id="theme-color">
+<meta name="theme-color" content="#f3f4f6" id="theme-color">
 <meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>OPLUS 充电温控</title>
@@ -59,9 +59,12 @@
 <section id="page-global" role="tabpanel" aria-labelledby="tab-global" hidden>
   <div class="card switch-card">
     <div class="setting-row"><div><div class="setting-title"><label for="global_enabled">全局温控</label><span class="small-badge" id="global-flag">关闭</span></div><p class="hint">未使用充电预设时应用，默认关闭</p></div><input id="global_enabled" class="switch" type="checkbox"></div>
+  </div>
+  <div class="section-heading"><h2>全局策略</h2><span>按需开启</span></div>
+  <div class="card switch-card">
     <div class="setting-row"><div><label for="horae_stop">停止 Horae 服务</label><p class="hint">随全局预设启用</p></div><input id="horae_stop" class="switch" type="checkbox" checked></div>
   </div>
-  <div class="section-heading"><h2>全局目标</h2><span>配置值 · 非物理温度</span></div>
+  <div class="section-heading"><h2>全局温度伪装</h2><span>配置值 · 非物理温度</span></div>
   <div class="card temperature-group">
 <div class="temperature-control tone-shell">
   <div class="temperature-head"><span class="temperature-tag">BAT</span><label for="batt_temp_mc">电池壳温</label><output id="batt_temp_mc_value" for="batt_temp_mc">34℃</output></div>
@@ -100,27 +103,32 @@
 </section>
 <section id="page-charge" role="tabpanel" aria-labelledby="tab-charge" hidden>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_trigger">充电独立预设</label><p class="hint">充电或已充满时启用；拔线后按全局开关运行。</p></div><input id="charge_trigger" class="switch" type="checkbox" checked></div></div>
+  <div class="section-heading"><h2>充电策略</h2><span>按需开启</span></div>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_pps_stability">PPS 稳定性辅助</label><p class="hint">参考充电器输出电流，减少低电流误退；保留原厂满电收尾。</p><p class="hint" id="pps-assist-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_pps_stability" class="switch" type="checkbox" aria-describedby="pps-assist-status"></div></div>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_engineer_policy">售后充电分档</label><p class="hint">采用原厂售后充电分档，随温度调整；保留满电收尾。生效和恢复时会短暂重载电池服务。</p><p class="hint" id="engineer-policy-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_engineer_policy" class="switch" type="checkbox" aria-describedby="engineer-policy-status"></div></div>
-  <div class="card" id="power-limit-card">
-    <div class="setting-row"><div><label for="charge_power_limit_enabled">最大充电功率</label><p class="hint">原厂允许时尽量贴近上限，减缓高功率温升；保留温控降流与满电收尾。</p></div><input id="charge_power_limit_enabled" class="switch" type="checkbox" aria-describedby="power-limit-status"></div>
-    <div id="power-limit-controls"><div class="setting-row"><label for="charge_power_limit_watts">输入功率上限 · 20–100W</label><output id="charge_power_limit_watts_value" for="charge_power_limit_watts">50W</output></div>
-    <input id="charge_power_limit_watts" type="range" min="20" max="100" step="1" value="50" aria-valuetext="50瓦">
-    <fieldset class="power-protocols"><legend>生效协议</legend>
-      <label><input type="checkbox" name="charge_power_limit_protocols" value="supervooc" checked> SuperVooc</label>
-      <label><input type="checkbox" name="charge_power_limit_protocols" value="ufcs"> UFCS</label>
-      <label><input type="checkbox" name="charge_power_limit_protocols" value="pps"> PPS</label>
-      <label><input type="checkbox" name="charge_power_limit_protocols" value="pd"> PD</label>
-    </fieldset></div>
-    <p class="hint">按手机 USB 输入侧计。硬件档位与原厂限制可能使实际功率更低，瞬时功率存在调整延迟。</p>
-    <p class="hint" id="power-limit-status" role="status">默认关闭 · 默认仅 SuperVooc</p>
+  <div class="card power-card" id="power-limit-card">
+    <div class="setting-row power-heading"><label for="charge_power_limit_enabled">最大充电功率</label><input id="charge_power_limit_enabled" class="switch" type="checkbox" aria-describedby="power-limit-note power-limit-status"></div>
+    <p class="hint" id="power-limit-note">原厂允许时尽量贴近上限，保留温控降流与满电收尾。</p>
+    <div id="power-limit-controls">
+      <div class="power-value-row"><label for="charge_power_limit_watts">USB 输入上限</label><div class="power-reading"><output id="charge_power_limit_watts_value" for="charge_power_limit_watts" aria-label="功率上限（瓦）">50</output><span aria-hidden="true">W</span></div></div>
+      <div class="power-slider"><input id="charge_power_limit_watts" type="range" min="20" max="100" step="1" value="50" aria-valuetext="50瓦"><div class="scale" aria-hidden="true"><span>20 W</span><span>100 W</span></div></div>
+      <fieldset class="power-protocols"><legend>生效协议<span>可多选</span></legend>
+        <div class="protocol-grid">
+          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="supervooc" checked><span class="protocol-option"><span>SuperVooc</span><span class="protocol-check" aria-hidden="true"></span></span></label>
+          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="ufcs"><span class="protocol-option"><span>UFCS</span><span class="protocol-check" aria-hidden="true"></span></span></label>
+          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="pps"><span class="protocol-option"><span>PPS</span><span class="protocol-check" aria-hidden="true"></span></span></label>
+          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="pd"><span class="protocol-option"><span>PD</span><span class="protocol-check" aria-hidden="true"></span></span></label>
+        </div>
+      </fieldset>
+    </div>
   </div>
+  <div class="power-caption"><p class="hint">硬件档位与原厂限制可能使实际功率更低，瞬时功率存在调整延迟。</p><p class="hint" id="power-limit-status" role="status">默认关闭 · 默认仅 SuperVooc</p></div>
   <p class="hint" id="engineer-conflict-hint" hidden>以下设置由售后充电分档临时接管，原值已保留；关闭后恢复可编辑。</p>
   <div class="card horae-card" id="charge-horae-card"><div class="setting-row"><label for="charge_horae_enabled">充电 Horae 调整</label><input id="charge_horae_enabled" class="switch" type="checkbox" checked></div>
     <div class="segmented solid" role="group" aria-label="充电 Horae 模式"><label><input name="charge_horae_mode" type="radio" value="charging"><span>充电时禁用</span></label><label><input name="charge_horae_mode" type="radio" value="smart" checked><span>智能调整</span></label></div>
     <p class="hint horae-hint" id="horae-mode-hint">相机占用或未知时恢复，空闲稳定 3 秒后禁用。</p>
   </div>
-  <div class="section-heading"><h2>充电目标</h2><span>配置值 · 非物理温度</span></div>
+  <div class="section-heading"><h2>充电时温度伪装</h2><span>配置值 · 非物理温度</span></div>
   <div class="card temperature-group" id="charge-temperature-card">
 <div class="temperature-control tone-shell">
   <div class="temperature-head"><span class="temperature-tag">BAT</span><label for="charge_batt_temp_mc">电池壳温</label><output id="charge_batt_temp_mc_value" for="charge_batt_temp_mc">30℃</output></div>
@@ -193,7 +201,7 @@
   </div>
 </section>
 </form></main>
-<div class="savebar" id="savebar" hidden><p>有未保存的更改</p><div class="save-actions"><button class="secondary backend" id="discard" type="button">撤销</button><button class="primary backend" id="save" type="submit" form="settings">保存设置</button></div><p>步进 1℃ · 保存后应用</p></div>
+<div class="savebar" id="savebar" hidden><p>有未保存的更改</p><div class="save-actions"><button class="secondary backend" id="discard" type="button">撤销</button><button class="primary backend" id="save" type="submit" form="settings">保存设置</button></div></div>
 <nav class="nav" role="tablist" aria-label="主导航">
 <button type="button" id="tab-overview" role="tab" aria-controls="page-overview" aria-selected="true" tabindex="0"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pulse"/></svg><span>概览</span></button>
 <button type="button" id="tab-global" role="tab" aria-controls="page-global" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-thermo"/></svg><span>全局</span></button>

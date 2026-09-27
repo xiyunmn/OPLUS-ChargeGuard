@@ -20,7 +20,7 @@ window.CGDisplay={get:()=>scale,min:85,max:115,default:100,set:value=>{
 applyScale();
 const media=matchMedia('(prefers-color-scheme: dark)');
 let mode='system';try{const value=localStorage.getItem('chargeguard-theme');if(['light','dark','system'].includes(value))mode=value;}catch(_){}
-function apply(){const dark=mode==='dark'||(mode==='system'&&media.matches);root.dataset.theme=dark?'dark':'light';document.getElementById('theme-color').content=dark?'#0d1526':'#f3f6fc';}
+function apply(){const dark=mode==='dark'||(mode==='system'&&media.matches);root.dataset.theme=dark?'dark':'light';document.getElementById('theme-color').content=dark?'#090c10':'#f3f4f6';}
 window.CGTheme={get:()=>mode,set:value=>{if(!['light','dark','system'].includes(value))return;mode=value;try{localStorage.setItem('chargeguard-theme',value);}catch(_){}apply();}};
 media.addEventListener('change',apply);apply();
 

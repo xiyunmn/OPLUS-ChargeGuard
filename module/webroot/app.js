@@ -49,7 +49,7 @@ function controls(){
 }
 function labels(){
   const power=$('charge_power_limit_watts'),watts=Number(power.value);
-  setText($('charge_power_limit_watts_value'),watts+'W');power.setAttribute('aria-valuetext',watts+'瓦');
+  setText($('charge_power_limit_watts_value'),watts);power.setAttribute('aria-valuetext',watts+'瓦');
   power.style.setProperty('--fill',100*(watts-20)/80+'%');
   for(const key of tempKeys){
     const input=$(key),v=Number(input.value);setText($(key+'_value'),v+'℃');input.setAttribute('aria-valuetext',v+'摄氏度');
