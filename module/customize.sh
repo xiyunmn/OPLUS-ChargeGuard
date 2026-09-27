@@ -20,6 +20,7 @@ done
 set_perm "$MODPATH/bin/cg" 0 0 0755
 set_perm "$MODPATH/bin/cg-cooling-events" 0 0 0755
 set_perm "$MODPATH/bin/charge_guard_pps.ko" 0 0 0644
+set_perm "$MODPATH/bin/charge_guard_power.ko" 0 0 0644
 for cg_script in service.sh post-fs-data.sh action.sh uninstall.sh; do
   set_perm "$MODPATH/$cg_script" 0 0 0755
 done

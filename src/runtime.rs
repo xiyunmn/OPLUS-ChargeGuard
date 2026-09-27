@@ -431,6 +431,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             last_profile = profile.into();
         }
         let smart = profile == "charging"
+            && !c.effective(&charge, false).charge_engineer_policy
             && c.charge_horae_enabled
             && c.charge_horae_mode == HoraeMode::Smart;
         if smart && monitor.is_none() {
@@ -542,7 +543,10 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                     .as_ref()
                     .is_some_and(|m| !m.snapshot().permits_horae(now_ms()))
         });
-        if effective.enabled && h.capabilities().shell_slots.is_none() {
+        if effective.enabled
+            && !effective.charge_engineer_policy
+            && h.capabilities().shell_slots.is_none()
+        {
             statuses.push(control::BackendStatus {
                 id: "shell_temp_capability".into(),
                 family: "shell".into(),
@@ -595,12 +599,17 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 let mut v = json!(s);
                 let op = ops.iter().find(|o| o.id == s.id);
                 let retrying = matches!(s.state.as_str(), "retrying" | "restore_pending");
-                let blocked = s.state == "unverified";
+                let blocked = matches!(s.state.as_str(), "unverified" | "blocked");
                 let repair_wait = s.state == "repair_wait";
                 let event = schedule.is_event(&s.id) && !retrying;
                 let dormant = matches!(
                     s.id.as_str(),
-                    "omrg" | "migt" | control::ORMS | crate::pps::ID
+                    "omrg"
+                        | "migt"
+                        | control::ORMS
+                        | crate::pps::ID
+                        | crate::engineer::ID
+                        | crate::power::ID
                 ) && matches!(s.state.as_str(), "unavailable" | "unsupported");
                 let hybrid = op.is_some_and(|o| controls.as_ref().is_some_and(|l| l.hybrid(o)));
                 let verify =
@@ -726,8 +735,9 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             "counters":h.counters(),
             "device_capabilities":h.capabilities(),
             "pps_assist":crate::pps::status(h).ok(),
+            "power_limit":crate::power::status(h).ok(),
             "heartbeat_interval_secs":120,
-            "owned_count":controller.journal.entries.len(),"mount_count":controller.journal.entries.values().filter(|e|matches!(e.op.method,control::Method::Bind{..})&&e.applied).count()});
+            "owned_count":controller.journal.entries.len(),"mount_count":controller.journal.entries.values().filter(|e|matches!(e.op.method,control::Method::Bind{..}|control::Method::Engineer)&&e.applied).count()});
         snapshot["counters"]["worker_cpu_ms"] = json!(worker_cpu_ms());
         snapshot["counters"].as_object_mut().unwrap().extend(
             controller

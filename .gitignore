@@ -51,6 +51,7 @@
 !/src/hardware.rs
 !/src/lib.rs
 !/src/pps.rs
+!/src/engineer.rs
 !/src/main.rs
 !/src/maintenance.rs
 !/src/maintenance_events.rs
@@ -78,3 +79,10 @@
 __pycache__/
 !/README.md
 !/LICENSE
+
+!/src/power.rs
+!/kernel/charge_guard_power.c
+!/kernel/power_policy.h
+!/kernel/pjz110-power-target.json
+!/kernel/pjz110-power-symbols.json
+!/tools/build_power.py

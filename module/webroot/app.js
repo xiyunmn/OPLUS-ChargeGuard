@@ -4,7 +4,7 @@ const $=id=>document.getElementById(id);
 const pages={overview:document.title,global:'全局温控',charge:'充电预设',preferences:'设置'};
 const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge_batt_temp_mc','charge_cpu_temp_mc','charge_gpu_temp_mc','charge_ddr_temp_mc'];
 const counts=new Intl.NumberFormat('en-US');
-const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复中',repair_wait:'等待修复窗口',unverified:'能力待验证'};
+const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复中',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压'};
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
@@ -37,9 +37,20 @@ function controls(){
     const slider=$(button.dataset.target),v=Number(slider.value),step=Number(button.dataset.adjust);
     button.disabled=unavailable||!config||(step<0?v<=Number(slider.min):v>=Number(slider.max));
   }
+  const engineer=$('charge_engineer_policy').checked;
+  $('engineer-conflict-hint').hidden=!engineer;
+  for(const id of ['charge-horae-card','charge-temperature-card']){
+    const card=$(id);card.classList.toggle('temporarily-disabled',engineer);card.setAttribute('aria-disabled',String(engineer));
+    if(engineer)for(const node of card.querySelectorAll('input,button'))node.disabled=true;
+  }
+  for(const node of $('power-limit-controls').querySelectorAll('input'))node.disabled=unavailable||!config||!$('charge_power_limit_enabled').checked;
+  $('power-limit-controls').classList.toggle('temporarily-disabled',!$('charge_power_limit_enabled').checked);
   $('savebar').hidden=!dirty||currentPage==='overview';
 }
 function labels(){
+  const power=$('charge_power_limit_watts'),watts=Number(power.value);
+  setText($('charge_power_limit_watts_value'),watts+'W');power.setAttribute('aria-valuetext',watts+'瓦');
+  power.style.setProperty('--fill',100*(watts-20)/80+'%');
   for(const key of tempKeys){
     const input=$(key),v=Number(input.value);setText($(key+'_value'),v+'℃');input.setAttribute('aria-valuetext',v+'摄氏度');
     input.style.setProperty('--fill',100*(v-Number(input.min))/(Number(input.max)-Number(input.min))+'%');
@@ -54,9 +65,11 @@ function labels(){
 function populate(next){
   config=next;
   for(const key of tempKeys)$(key).value=next[key]/1000;
-  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','detailed_logging'])$(key).checked=!!next[key];
+  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])$(key).checked=!!next[key];
   for(const radio of document.querySelectorAll('[name=charge_horae_mode]'))radio.checked=radio.value===next.charge_horae_mode;
   for(const radio of document.querySelectorAll('[name=write_mode]'))radio.checked=radio.value===(next.write_mode||'event');
+  $('charge_power_limit_watts').value=next.charge_power_limit_watts??50;
+  for(const node of document.querySelectorAll('[name=charge_power_limit_protocols]'))node.checked=(next.charge_power_limit_protocols??['supervooc']).includes(node.value);
   dirty=false;labels();controls();
 }
 function page(key){
@@ -132,7 +145,28 @@ function render(data){
   const reason=fresh?(idle?(s.config?.charge_trigger?'等待充电，当前未应用运行时控制':'预设已关闭，核心保持观察'):''):(active?'守护进程继续维护，请稍后刷新':'点击启动核心恢复观察');
   setText($('reason'),reason);$('reason').hidden=!reason;
   const ops=Array.isArray(s.backends)?s.backends:[];
+  const powerOp=ops.find(op=>op.id==='charge_power_limit'),power=s.power_limit;
+  const protocolNames={1:'SuperVooc',2:'UFCS',3:'PPS',4:'PD'};
+  setText($('power-limit-status'),!fresh?'等待最新运行状态':
+    powerOp?.state==='restore_pending'||power?.state==='restore_pending'?'恢复未完成，请查看后端详情':
+    !s.config?.charge_power_limit_enabled?'已关闭':
+    powerOp?.state==='unsupported'?'当前充电固件未适配，未启用':
+    !s.config?.enabled||!s.config?.charge_trigger?'等待模块和充电预设启用':
+    s.charge_status!=='Charging'?'等待充电':
+    power?.state==='applied'?`${protocolNames[power.protocol]||'当前协议'} · ${power.watts}W 上限已应用；实际功率由原厂约束`:
+    power?.state==='waiting_protocol'?'当前协议未选中或尚未进入快充':
+    ['data_error','vote_rejected','conflict','retired'].includes(power?.state)?'限流尚未生效，请查看后端详情':
+    powerOp?.state==='retrying'?'辅助模块未就绪，请查看后端详情':'等待有效电压与限流确认');
   const pps=ops.find(op=>op.id==='pps_status_assist'),assist=s.pps_assist;
+  const engineer=ops.find(op=>op.id==='engineer_charge_policy');
+  setText($('engineer-policy-status'),!fresh?'等待最新运行状态':
+    config?.revision>s.config?.revision?'新设置已保存，等待后台确认应用或恢复':
+    engineer?.state==='restore_pending'?'恢复未完成，温度覆盖继续暂停，请查看后端详情':
+    engineer?.state==='blocked'?'应用失败后已回退；检查后重新保存可重试':
+    !s.config?.charge_engineer_policy?'已关闭':
+    engineer?.state==='unsupported'?'当前固件、在线策略或运行条件不支持，请查看后端详情':
+    engineer?.state==='applied'?'配置已应用；充电功率仍由原厂控制':
+    s.profile!=='charging'||s.charge_status!=='Charging'?'等待充电，满电后自动恢复':'正在准备或等待恢复完成');
   setText($('pps-assist-status'),!fresh?'等待最新运行状态':
     pps?.state==='restore_pending'?'辅助功能恢复中，请查看后端详情':
     pps?.state==='retrying'?'辅助功能未生效，请查看后端详情':
@@ -181,7 +215,7 @@ function backendGroup(op){
   if(String(op.target).endsWith('/emul_temp'))return ['emul_temp','emul_temp','shell'];
   if(String(op.target).startsWith('/proc/game_opt/'))return ['game_opt','game_opt','frequency'];
   if(['omrg','migt'].includes(op.id))return [op.id,op.id.toUpperCase(),'frequency'];
-  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务',pps:'PPS 稳定性辅助'};
+  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务',pps:'PPS 稳定性辅助',engineer:'售后充电分档',power:'最大充电功率'};
   if(names[op.family])return [op.family,names[op.family],op.family];
   return [op.id||op.target,op.id||op.target||'其他后端',op.family||'other'];
 }
@@ -335,7 +369,10 @@ async function save(event){
   requestEpoch++;busy=true;controls();
   try{
     const next={...config};for(const key of tempKeys)next[key]=Math.round(Number($(key).value)*1000);
-    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','detailed_logging'])next[key]=$(key).checked;
+    next.charge_power_limit_watts=Number($('charge_power_limit_watts').value);
+    next.charge_power_limit_protocols=Array.from(document.querySelectorAll('[name=charge_power_limit_protocols]:checked'),node=>node.value);
+    if($('charge_power_limit_enabled').checked&&!next.charge_power_limit_protocols.length)throw new Error('请至少选择一个限功率协议');
+    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])next[key]=$(key).checked;
     next.charge_horae_mode=document.querySelector('[name=charge_horae_mode]:checked').value;next.write_mode=document.querySelector('[name=write_mode]:checked').value;
     const result=await CG.call('configure-hex',CG.hex({expected_revision:config.revision,config:next}));populate(result.config);message('设置已保存',false,'config');
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}

@@ -167,3 +167,7 @@ pre{font:0.625rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space
 .dpi-controls output{min-width:3rem;text-align:center;font-size:.8125rem;font-weight:650;color:var(--accent-ink);font-variant-numeric:tabular-nums}
 .dpi-controls .icon-button{width:44px;height:44px;background:var(--soft)}
 .dpi-reset{padding:0 .25rem;min-height:44px;font-size:.625rem;color:var(--accent-ink)}
+.temporarily-disabled{opacity:.5;filter:grayscale(1)}
+.temporarily-disabled input,.temporarily-disabled button{cursor:not-allowed}
+
+.power-protocols{border:0;padding:0;margin:16px 0 0;display:flex;flex-wrap:wrap;gap:12px 18px}.power-protocols legend{padding:0;margin-bottom:10px}.power-protocols label{display:flex;align-items:center;gap:6px}#charge_power_limit_watts{width:100%;margin-top:12px}

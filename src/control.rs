@@ -27,6 +27,8 @@ pub enum Method {
     Bind { source: String },
     Service,
     Pps,
+    Engineer,
+    Power,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Operation {
@@ -84,6 +86,7 @@ pub struct Controller {
     pub journal: Journal,
     pub rounds: u64,
     pub stable: u32,
+    power: crate::power::Session,
     persisted: RefCell<Option<Journal>>,
     persisted_stamp: RefCell<Option<[u64; 10]>>,
     statuses: BTreeMap<String, BackendStatus>,
@@ -93,6 +96,12 @@ pub struct Controller {
 }
 pub fn mask_source(path: &str) -> String {
     format!("{MASKS}/mask_{:x}", Sha256::digest(path.as_bytes()))
+}
+fn temperature_input(op: &Operation) -> bool {
+    matches!(
+        op.method,
+        Method::Shell | Method::Emulation | Method::Bind { .. }
+    )
 }
 fn write(
     id: &str,
@@ -118,6 +127,21 @@ pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Op
         return vec![];
     }
     let mut ops = vec![];
+    if c.charge_power_limit_enabled {
+        let mask = c
+            .charge_power_limit_protocols
+            .iter()
+            .fold(0, |m, p| m | p.bit());
+        ops.push(write(
+            crate::power::ID,
+            "power",
+            crate::power::DEVICE,
+            format!("{} {} {}", c.revision, c.charge_power_limit_watts, mask),
+            None,
+            Method::Power,
+            None,
+        ));
+    }
     if c.charge_pps_stability {
         ops.push(write(
             crate::pps::ID,
@@ -261,6 +285,18 @@ pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Op
             ));
         }
     }
+    if c.charge_engineer_policy {
+        ops.retain(|o| !temperature_input(o) && o.id != "horae");
+        ops.push(write(
+            crate::engineer::ID,
+            "engineer",
+            crate::engineer::TARGET,
+            c.revision.to_string(),
+            None,
+            Method::Engineer,
+            None,
+        ));
+    }
     ops
 }
 fn sensor_type(h: &Hardware, op: &Operation) -> Option<String> {
@@ -316,6 +352,7 @@ impl Controller {
             journal: j,
             rounds: 0,
             stable: 0,
+            power: crate::power::Session::default(),
             persisted: RefCell::new(persisted),
             persisted_stamp: RefCell::new(Self::stamp(&path)),
             statuses: BTreeMap::new(),
@@ -414,6 +451,30 @@ impl Controller {
         let mut statuses = self.restore_ids(h, &obsolete);
         let mut changed = false;
         for op in ops.iter().filter(|op| due.contains(&op.id)) {
+            if op.method == Method::Power {
+                statuses.push(self.reconcile_power(h, op));
+                continue;
+            }
+            if op.method == Method::Engineer {
+                statuses.push(self.reconcile_engineer(h, op));
+                continue;
+            }
+            // Do not reapply temperature masking while the old policy may still
+            // be loaded in Battery. Recovery of this backend has priority.
+            if !wanted.contains(crate::engineer::ID)
+                && self.journal.entries.contains_key(crate::engineer::ID)
+                && (temperature_input(op) || op.id == "horae")
+            {
+                statuses.push(BackendStatus {
+                    id: op.id.clone(),
+                    family: op.family.clone(),
+                    target: op.target.clone(),
+                    desired: op.desired.clone(),
+                    state: "restore_pending".into(),
+                    detail: Some("policy_restore_before_temperature_control".into()),
+                });
+                continue;
+            }
             let previously_owned = self.journal.entries.contains_key(&op.id);
             let mut verification = self.verification.get(&op.id).cloned().unwrap_or_default();
             verification.write_performed = false;
@@ -470,6 +531,7 @@ impl Controller {
                         Method::Emulation | Method::Shell | Method::Bind { .. } => None,
                         Method::Write => h.read(&op.target).ok(),
                         Method::Pps => Some(crate::pps::original(h)?),
+                        Method::Engineer | Method::Power => unreachable!(),
                     };
                     if op.method == Method::Service
                         && !matches!(original.as_deref(), Some("running" | "stopped"))
@@ -675,17 +737,231 @@ impl Controller {
         }
         self.statuses.values().cloned().collect()
     }
+    fn reconcile_power(&mut self, h: &Hardware, op: &Operation) -> BackendStatus {
+        let mut result = BackendStatus {
+            id: op.id.clone(),
+            family: op.family.clone(),
+            target: op.target.clone(),
+            desired: op.desired.clone(),
+            state: "unsupported".into(),
+            detail: None,
+        };
+        let action = (|| -> Result<String> {
+            validate_operation(op)?;
+            if !h.capabilities().pps_verified {
+                return Ok("unsupported".into());
+            }
+            let previous = self.journal.entries.get(&op.id).cloned();
+            if previous.is_none() {
+                crate::power::check_available(h)?;
+            }
+            if previous.as_ref().is_none_or(|e| e.op != *op) {
+                self.journal.entries.insert(
+                    op.id.clone(),
+                    Owned {
+                        op: op.clone(),
+                        original: Some("exclusive_private_vote".into()),
+                        applied: false,
+                        error: None,
+                    },
+                );
+                if let Err(error) = self.save(h) {
+                    if let Some(old) = previous {
+                        self.journal.entries.insert(op.id.clone(), old);
+                    } else {
+                        self.journal.entries.remove(&op.id);
+                    }
+                    return Err(error);
+                }
+            }
+            let state = self.power.apply(h, &op.desired)?;
+            result.detail = Some(serde_json::to_string(&state).map_err(|e| e.to_string())?);
+            Ok(
+                if matches!(
+                    state.state.as_str(),
+                    "data_error" | "vote_rejected" | "conflict" | "retired"
+                ) {
+                    "retrying".into()
+                } else {
+                    state.state
+                },
+            )
+        })();
+        match action {
+            Ok(state) => result.state = state,
+            Err(error) => {
+                result.state = if error == "power_firmware_not_supported" {
+                    "unsupported"
+                } else {
+                    "retrying"
+                }
+                .into();
+                result.detail = Some(error);
+            }
+        }
+        if let Some(entry) = self.journal.entries.get_mut(&op.id) {
+            entry.applied = result.state == "applied";
+            entry.error = if result.state == "retrying" {
+                result.detail.clone()
+            } else {
+                None
+            };
+        }
+        result
+    }
+    fn save_engineer(&mut self, h: &Hardware, session: &crate::engineer::Session) -> Result<()> {
+        let value = serde_json::to_string(session).map_err(|e| e.to_string())?;
+        let entry = self
+            .journal
+            .entries
+            .get_mut(crate::engineer::ID)
+            .ok_or("policy_ownership_missing")?;
+        let old = entry.original.replace(value);
+        if let Err(e) = self.save(h) {
+            self.journal
+                .entries
+                .get_mut(crate::engineer::ID)
+                .unwrap()
+                .original = old;
+            return Err(e);
+        }
+        Ok(())
+    }
+    fn reconcile_engineer(&mut self, h: &Hardware, op: &Operation) -> BackendStatus {
+        let mut result = BackendStatus {
+            id: op.id.clone(),
+            family: op.family.clone(),
+            target: op.target.clone(),
+            desired: op.desired.clone(),
+            state: "unsupported".into(),
+            detail: None,
+        };
+        let action = (|| -> Result<&'static str> {
+            validate_operation(op)?;
+            if self
+                .journal
+                .entries
+                .get(&op.id)
+                .is_some_and(|e| e.op.desired != op.desired)
+            {
+                let previous = self.journal.entries[&op.id].clone();
+                let mut session = crate::engineer::Session::parse(previous.original.as_deref())?;
+                if session.phase == crate::engineer::Phase::Applied && !session.failed {
+                    // An unrelated config save does not alter the generated XML.
+                    self.journal.entries.get_mut(&op.id).unwrap().op.desired = op.desired.clone();
+                    if let Err(e) = self.save(h) {
+                        self.journal.entries.insert(op.id.clone(), previous);
+                        return Err(e);
+                    }
+                } else {
+                    if session.phase == crate::engineer::Phase::ReloadRestore {
+                        // Consume this explicit retry before issuing another
+                        // restore reload; periodic reconciliation cannot repeat it.
+                        session.phase = crate::engineer::Phase::Unmounting;
+                        session.failed = true;
+                        let entry = self.journal.entries.get_mut(&op.id).unwrap();
+                        entry.op.desired = op.desired.clone();
+                        entry.original =
+                            Some(serde_json::to_string(&session).map_err(|e| e.to_string())?);
+                        if let Err(e) = self.save(h) {
+                            self.journal.entries.insert(op.id.clone(), previous);
+                            return Err(e);
+                        }
+                    }
+                    self.restore_ids(h, &[op.id.clone()]);
+                    if self.journal.entries.contains_key(&op.id) {
+                        return Err("policy_previous_restore_pending".into());
+                    }
+                }
+            }
+            if self
+                .journal
+                .entries
+                .values()
+                .any(|e| temperature_input(&e.op) || e.op.id == "horae")
+            {
+                return Err("policy_waiting_temperature_restore".into());
+            }
+            if !self.journal.entries.contains_key(&op.id) {
+                let session = crate::engineer::prepare(h)?;
+                self.journal.entries.insert(
+                    op.id.clone(),
+                    Owned {
+                        op: op.clone(),
+                        original: Some(serde_json::to_string(&session).map_err(|e| e.to_string())?),
+                        applied: false,
+                        error: None,
+                    },
+                );
+                if let Err(e) = self.save(h) {
+                    self.journal.entries.remove(&op.id);
+                    return Err(e);
+                }
+            }
+            self.save(h)?;
+            let mut session =
+                crate::engineer::Session::parse(self.journal.entries[&op.id].original.as_deref())?;
+            if session.failed {
+                if session.phase != crate::engineer::Phase::Restored {
+                    crate::engineer::restore(h, &mut session, &mut |s| self.save_engineer(h, s))?;
+                }
+                return Ok("blocked");
+            }
+            if let Err(error) =
+                crate::engineer::apply(h, &mut session, &mut |s| self.save_engineer(h, s))
+            {
+                session.failed = true;
+                // On persistence failure stop here; keep the last durable phase
+                // for recovery instead of issuing an unjournaled app restart.
+                self.save_engineer(h, &session)?;
+                let recovery =
+                    crate::engineer::restore(h, &mut session, &mut |s| self.save_engineer(h, s));
+                self.journal.entries.get_mut(&op.id).unwrap().error = Some(error.clone());
+                self.save(h)?;
+                recovery.map_err(|e| format!("{error};restore:{e}"))?;
+                return Ok("blocked");
+            }
+            Ok("applied")
+        })();
+        match action {
+            Ok(state) => {
+                result.state = state.into();
+                result.detail = self
+                    .journal
+                    .entries
+                    .get(&op.id)
+                    .and_then(|e| e.error.clone())
+                    .or_else(|| Some("policy_config_applied_not_power_verified".into()));
+            }
+            Err(error) => {
+                result.state = if self.journal.entries.contains_key(&op.id) {
+                    "restore_pending"
+                } else if error == "policy_waiting_temperature_restore" {
+                    "retrying"
+                } else {
+                    "unsupported"
+                }
+                .into();
+                result.detail = Some(error);
+            }
+        }
+        if let Some(entry) = self.journal.entries.get_mut(&op.id) {
+            entry.applied = result.state == "applied";
+        }
+        result
+    }
     fn restore_ids(&mut self, h: &Hardware, ids: &[String]) -> Vec<BackendStatus> {
-        let before = self.journal.clone();
+        let mut before = self.journal.clone();
         let mut entries = ids
             .iter()
             .filter_map(|id| self.journal.entries.get(id).cloned())
             .collect::<Vec<_>>();
         entries.sort_by_key(|e| match e.op.method {
-            Method::Bind { .. } => 0,
-            Method::Shell | Method::Emulation => 1,
-            Method::Write | Method::Pps => 2,
-            Method::Service => 3,
+            Method::Engineer | Method::Power => 0,
+            Method::Bind { .. } => 1,
+            Method::Shell | Method::Emulation => 2,
+            Method::Write | Method::Pps => 3,
+            Method::Service => 4,
         });
         let mut statuses = vec![];
         for e in entries {
@@ -693,7 +969,14 @@ impl Controller {
             let r = (|| -> Result<()> {
                 validate_operation(op)?;
                 match &op.method {
+                    Method::Engineer => {
+                        let mut session = crate::engineer::Session::parse(e.original.as_deref())?;
+                        crate::engineer::restore(h, &mut session, &mut |s| {
+                            self.save_engineer(h, s)
+                        })?;
+                    }
                     Method::Pps => crate::pps::restore(h, e.original.as_deref())?,
+                    Method::Power => self.power.restore(h)?,
                     Method::Bind { source } => {
                         h.unbind(&op.target, source)?;
                         let _ = fs::remove_file(h.path(source));
@@ -777,6 +1060,17 @@ impl Controller {
         }
         if !ids.is_empty() {
             if let Err(error) = self.save(h) {
+                // Preserve the latest durable reload checkpoint. Reverting to
+                // the pre-restore phase could issue the same restart twice.
+                if let Some(entry) = self
+                    .persisted
+                    .borrow()
+                    .as_ref()
+                    .and_then(|j| j.entries.get(crate::engineer::ID))
+                    .cloned()
+                {
+                    before.entries.insert(crate::engineer::ID.into(), entry);
+                }
                 self.journal = before;
                 for status in &mut statuses {
                     status.state = "restore_pending".into();
@@ -830,6 +1124,22 @@ fn validate_operation(op: &Operation) -> Result<()> {
             })
         });
     let ok = match &op.method {
+        Method::Power => {
+            op.id == crate::power::ID
+                && op.family == "power"
+                && t == crate::power::DEVICE
+                && crate::power::settings(&op.desired).is_ok()
+                && op.reset.is_none()
+                && op.sensor_type.is_none()
+        }
+        Method::Engineer => {
+            op.id == crate::engineer::ID
+                && op.family == "engineer"
+                && t == crate::engineer::TARGET
+                && op.desired.parse::<u64>().is_ok()
+                && op.reset.is_none()
+                && op.sensor_type.is_none()
+        }
         Method::Pps => {
             op.id == crate::pps::ID
                 && op.family == "pps"

@@ -136,9 +136,12 @@ impl Schedule {
         self.dormant = statuses
             .iter()
             .filter(|s| {
+                if s.id == crate::engineer::ID {
+                    return matches!(s.state.as_str(), "unsupported" | "blocked");
+                }
                 matches!(
                     s.id.as_str(),
-                    "omrg" | "migt" | crate::control::ORMS | crate::pps::ID
+                    "omrg" | "migt" | crate::control::ORMS | crate::pps::ID | crate::power::ID
                 ) && matches!(s.state.as_str(), "unavailable" | "unsupported")
             })
             .map(|s| s.id.clone())

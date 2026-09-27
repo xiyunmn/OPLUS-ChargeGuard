@@ -32,13 +32,13 @@ def undefined(path):
             result.add(strings[name:].split(b'\0')[0].decode())
     return result
 
-def build(llvm,output):
+def build(llvm,output,name="charge_guard_pps",profile_name="pjz110-target.json",symbols_name="pjz110-symbols.json"):
     llvm=pathlib.Path(llvm);output=pathlib.Path(output)
     win=(llvm/'clang.exe').exists();ext='.exe' if win else ''
     compiler=llvm/('clang'+ext);linker=llvm/('ld.lld'+ext)
-    work=ROOT/'target/pps-lkm';headers=work/'headers';work.mkdir(parents=True,exist_ok=True)
+    work=ROOT/('target/'+name+'-lkm');headers=work/'headers';work.mkdir(parents=True,exist_ok=True)
     archive=KERNEL/'pjz110-headers.tar.xz'
-    profile=json.loads((KERNEL/'pjz110-target.json').read_text())
+    profile=json.loads((KERNEL/profile_name).read_text())
     assert hashlib.sha256(archive.read_bytes()).hexdigest()==profile['headers_sha256']
     if not (headers/'include/generated/utsrelease.h').exists():
         headers.mkdir(exist_ok=True)
@@ -52,14 +52,18 @@ def build(llvm,output):
            '-fno-pic','-fno-pie','-fno-stack-protector','-fno-asynchronous-unwind-tables',
            '-fno-strict-aliasing','-fno-common','-mgeneral-regs-only','-mno-outline-atomics',
            '-mbranch-protection=pac-ret','-fsanitize=kcfi','-D__KERNEL__','-DMODULE',
-           '-DKBUILD_MODNAME="charge_guard_pps"','-DKBUILD_BASENAME="charge_guard_pps"',
+           '-DKBUILD_MODNAME="'+name+'"','-DKBUILD_BASENAME="'+name+'"',
            '-include',str(headers/'include/linux/kconfig.h'),'-Wall','-Wextra',
            '-Wno-unused-parameter','-Wno-sign-compare','-Wno-pointer-sign',
            '-ffile-prefix-map='+str(ROOT)+'=/src/charge-guard']
     for inc in includes:flags+=['-I',str(headers/inc)]
-    obj=work/'charge_guard_pps.o'
-    subprocess.run([compiler,*flags,'-c',KERNEL/'charge_guard_pps.c','-o',obj],check=True)
-    symbols=json.loads((KERNEL/'pjz110-symbols.json').read_text())
+    flags+=['-I',str(work)]
+    if name=='charge_guard_power':
+        from build_power import write_anchors
+        write_anchors(profile,work/'power_anchors.h')
+    obj=work/(name+'.o')
+    subprocess.run([compiler,*flags,'-c',KERNEL/(name+'.c'),'-o',obj],check=True)
+    symbols=json.loads((KERNEL/symbols_name).read_text())
     imports=(undefined(obj)-{'__this_module'})|{'module_layout'}
     missing=imports-symbols.keys()
     if missing:raise ValueError('No verified kernel CRC for: '+', '.join(sorted(missing)))
@@ -92,9 +96,10 @@ static const struct modversion_info cg_versions[] __used __section("__versions")
     assert not (undefined(output)-imports), 'unversioned imports introduced by module metadata'
     raw=output.read_bytes()
     assert profile['api'].encode() in raw
-    consumer=(ROOT/'src/pps.rs').read_text(encoding='utf-8')
-    assert all(profile[k] in consumer for k in ('api','kernel_release','driver_sha256'))
+    consumer=(ROOT/('src/pps.rs' if name=='charge_guard_pps' else 'src/power.rs')).read_text(encoding='utf-8')
+    assert profile['api'] in consumer
+    if name=='charge_guard_pps':assert all(profile[k] in consumer for k in ('kernel_release','driver_sha256'))
     assert b'__kcfi_typeid_' in raw, 'KCFI metadata required'
     assert str(ROOT).encode() not in raw
-    print('PPS LKM: pinned ARM64 / KCFI / original symbol CRCs / disabled by default:',output)
+    print(name+': pinned ARM64 / KCFI / original symbol CRCs / disabled by default:',output)
     return {'sha256':hashlib.sha256(raw).hexdigest(),'imports':sorted(imports),'kernel_release':profile['kernel_release']}

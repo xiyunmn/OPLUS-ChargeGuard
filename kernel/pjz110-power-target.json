@@ -1,0 +1,112 @@
+{
+  "kernel_release": "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k",
+  "headers_sha256": "70e782864b6518a0c5895249691d2a70cfe0ac45542d0193f2c92680ec003490",
+  "driver_sha256": "205fb7ebdd5d12438fbd40e7432d12c034929c629a8657ca17f38d50de7c63ce",
+  "source": "IKHEADERS extracted from connected PJZ110 /system_dlkm/lib/modules/kheaders.ko; CRCs extracted from same-device stock modules; no firmware images distributed",
+  "api": "pjz110-power-205fb7eb-v1",
+  "anchors": {
+    "vote": {
+      "relative_to_vote": 0,
+      "kcfi": 4014504411,
+      "entry": [
+        3573752639,
+        3506848767,
+        2836626429
+      ]
+    },
+    "find_votable": {
+      "relative_to_vote": 2800,
+      "kcfi": 1596243116,
+      "entry": [
+        3573752639,
+        2847767549,
+        2835437558
+      ]
+    },
+    "get_client_vote": {
+      "relative_to_vote": -524,
+      "kcfi": 1445765364,
+      "entry": [
+        3573752639,
+        2847767549,
+        2835437558
+      ]
+    },
+    "is_client_vote_enabled": {
+      "relative_to_vote": -1088,
+      "kcfi": 3749706938,
+      "entry": [
+        3573752639,
+        2847702013,
+        2835439608
+      ]
+    },
+    "get_effective_result": {
+      "relative_to_vote": -364,
+      "kcfi": 2066281249,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_mms_get_by_name": {
+      "relative_to_vote": 1602568,
+      "kcfi": 1141256189,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_mms_get_item_data": {
+      "relative_to_vote": 1598528,
+      "kcfi": 2997018989,
+      "entry": [
+        3573752639,
+        2847702013,
+        2835439608
+      ]
+    },
+    "oplus_mms_subscribe": {
+      "relative_to_vote": 1603124,
+      "kcfi": 2395247263,
+      "entry": [
+        3573752639,
+        3506766847,
+        2836364285
+      ]
+    },
+    "oplus_mms_unsubscribe": {
+      "relative_to_vote": 1603892,
+      "kcfi": 608852847,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_mms_put": {
+      "relative_to_vote": 1605384,
+      "kcfi": 4266203396,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_wired_get_vbus": {
+      "relative_to_vote": 1702828,
+      "kcfi": 917620134,
+      "entry": [
+        3573752639,
+        3506488319,
+        2835446781
+      ]
+    }
+  },
+  "kernel_image_sha256": "ee5ee448d2985eeeb7a8b5ad2e1efc34eeb410a8beae0ab484504d739124d613",
+  "crc_source": "Current boot_b kernel export CRC tables; crosschecked against 1059 same-device module imports",
+  "resolver": "oplus_pps_monitor_work",
+  "vote_from_resolver": -689940
+}

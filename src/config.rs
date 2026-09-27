@@ -17,6 +17,25 @@ pub enum WriteMode {
 fn yes() -> bool {
     true
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerProtocol {
+    Supervooc,
+    Ufcs,
+    Pps,
+    Pd,
+}
+impl PowerProtocol {
+    pub fn bit(self) -> u32 {
+        1 << self as u32
+    }
+}
+fn power_watts() -> u32 {
+    50
+}
+fn power_protocols() -> Vec<PowerProtocol> {
+    vec![PowerProtocol::Supervooc]
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -35,6 +54,14 @@ pub struct Config {
     pub charge_horae_enabled: bool,
     #[serde(default)]
     pub charge_pps_stability: bool,
+    #[serde(default)]
+    pub charge_engineer_policy: bool,
+    #[serde(default)]
+    pub charge_power_limit_enabled: bool,
+    #[serde(default = "power_watts")]
+    pub charge_power_limit_watts: u32,
+    #[serde(default = "power_protocols")]
+    pub charge_power_limit_protocols: Vec<PowerProtocol>,
     #[serde(default)]
     pub charge_horae_mode: HoraeMode,
     pub batt_temp_mc: i32,
@@ -66,6 +93,10 @@ impl Default for Config {
             charge_trigger: true,
             charge_horae_enabled: true,
             charge_pps_stability: false,
+            charge_engineer_policy: false,
+            charge_power_limit_enabled: false,
+            charge_power_limit_watts: power_watts(),
+            charge_power_limit_protocols: power_protocols(),
             charge_horae_mode: HoraeMode::Smart,
             batt_temp_mc: 34000,
             cpu_temp_mc: 40000,
@@ -80,6 +111,16 @@ impl Default for Config {
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        let unique = self
+            .charge_power_limit_protocols
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if !(20..=100).contains(&self.charge_power_limit_watts)
+            || unique.len() != self.charge_power_limit_protocols.len()
+            || (self.charge_power_limit_enabled && unique.is_empty())
+        {
+            return Err("power_limit_range_or_protocols_invalid".into());
+        }
         if self.schema != 3 || self.revision > 9_000_000_000_000 {
             return Err("config_schema_or_revision_invalid".into());
         }
@@ -128,6 +169,14 @@ impl Config {
     }
     pub fn effective(&self, status: &str, smart_permits_horae: bool) -> Self {
         let mut c = self.clone();
+        c.charge_power_limit_enabled = self.enabled
+            && self.charge_power_limit_enabled
+            && self.charge_trigger
+            && status.trim() == "Charging";
+        c.charge_engineer_policy = self.enabled
+            && self.charge_engineer_policy
+            && self.select(status).0 == "charging"
+            && status.trim() == "Charging";
         c.charge_pps_stability = self.charge_pps_stability
             && self.select(status).0 == "charging"
             && status.trim() == "Charging";

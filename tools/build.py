@@ -6,7 +6,8 @@ RUNTIME=('module.prop','customize.sh','service.sh','post-fs-data.sh','uninstall.
          'webroot/index.html','webroot/style.css','webroot/theme.js','webroot/bridge.js','webroot/app.js',
          'META-INF/com/google/android/update-binary','META-INF/com/google/android/updater-script')
 SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattributes','.gitignore')
-BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py',
+BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py',
+               'kernel/charge_guard_power.c','kernel/power_policy.h','kernel/pjz110-power-target.json','kernel/pjz110-power-symbols.json',
                'kernel/charge_guard_pps.c','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
                '.github/workflows/beta.yml','.github/workflows/release.yml',
                '.github/actions/build/action.yml')
@@ -92,7 +93,7 @@ def channel_build(a,m):
     if a.installation_only:command.append('--installation-only')
     run(command)
 def package(stage,out,m,installation_only=False):
-    names=(*RUNTIME,'bin/cg','bin/cg-camera.jar','bin/cg-cooling-events','bin/charge_guard_pps.ko')
+    names=(*RUNTIME,'bin/cg','bin/cg-camera.jar','bin/cg-cooling-events','bin/charge_guard_pps.ko','bin/charge_guard_power.ko')
     assert not (stage/'system.prop').exists()
     filename=f"{m['id']}_v{m['version']}.zip" if installation_only else f"{m['id']}_{m['version']}_magisk.zip"
     archive(out/filename,[(n,(stage/n).read_bytes(),n.endswith('.sh') or n in ('bin/cg','bin/cg-cooling-events') or n.endswith('/update-binary')) for n in names])
@@ -188,6 +189,8 @@ def build(a,m):
     cooling_listener(env,llvm,stage/'bin/cg-cooling-events')
     from build_pps import build as build_pps
     build_pps(llvm,stage/'bin/charge_guard_pps.ko')
+    from build_power import build as build_power
+    build_power(llvm,stage/'bin/charge_guard_power.ko')
     package(stage,pathlib.Path(a.output).resolve() if a.output else ROOT/'target/dist',m,a.installation_only)
 def linux_path(p):
     p=pathlib.Path(p).resolve();return '/mnt/'+p.drive[0].lower()+p.as_posix().split(':',1)[1]
@@ -224,6 +227,9 @@ def check(a,m):
     pps_test=target/'pps-kernel-test'
     run([*cc,'-std=c11','-O2','-Wall','-Wextra','-Wno-unused-variable','-Wno-sign-compare','-pthread',ROOT/'tests/pps_kernel.c','-o',pps_test],env=native_env)
     execute([linux_path(pps_test) if os.name=='nt' else str(pps_test)])
+    power_test=target/'power-kernel-test'
+    run([*cc,'-std=c11','-O2','-Wall','-Wextra','-Wno-unused-function','-Wno-unused-variable','-Wno-unused-parameter','-Wno-sign-compare',ROOT/'tests/power_kernel.c','-o',power_test],env=native_env)
+    execute([linux_path(power_test) if os.name=='nt' else str(power_test)])
     for name in ['lifecycle.py','installer.py','cooling_events.py']:
         script=ROOT/'tests'/name
         cmd=['python3',linux_path(script) if os.name=='nt' else str(script)]
