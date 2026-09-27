@@ -122,33 +122,37 @@ static const struct kernel_param_ops status_ops = { .get = get_status };
 module_param_cb(enabled, &enable_ops, NULL, 0600);
 module_param_cb(status, &status_ops, NULL, 0400);
 
-/* Instruction words are relocation-free, checked against the original device
- * ELF. Userspace also verifies the complete on-disk OEM image SHA-256. */
+/* Resolve every function independently: unrelated link-order/size changes must
+ * not turn the original relative addresses into pointers into another function.
+ * Userspace checks only the relevant interface contracts and loaded build ID. */
 static bool matching_layout(void)
 {
     const u8 *base = (const u8 *)probes[0].addr;
-    static const struct { unsigned int offset; u32 word; } anchors[] = {
-        { 0x0034, 0xd1064014 }, /* monitor work -> chip (-400) */
-        { 0x6ff4, 0x39709269 }, /* enable_pps_status at chip +3108 */
-        { 0x29a8, 0x396a5268 }, /* same field at monitor work +2708 */
-        { 0x31c4, 0x396a5268 }, /* same field in steady monitoring */
-        { 0x703c, 0x52800c88 }, /* Ibat threshold 100 */
-        { 0x7148, 0x7100113f }, /* abnormal count 4 */
-        { 0x7178, 0x392fb268 }, /* quit_pps_protocol field */
-        { 0x4114, 0x7100211f }, /* recovery wired type 8 */
-        { 0x416c, 0x3109651f }, /* recovery Ibat <= -601 */
-        { 0x4178, 0x71000d1f }, /* recovery count */
-        { 0x53d4, 0x51002929 }, /* admission temperature hysteresis */
-        { 0x53e4, 0x51002929 },
+    static const struct { const char *symbol; unsigned int offset; u32 word; } anchors[] = {
+        { "oplus_chg_v2:oplus_third_pps_target_voltage_check", 0x1cc, 0x39709269 },
+        { "oplus_chg_v2:oplus_third_pps_target_voltage_check", 0x214, 0x52800c88 },
+        { "oplus_chg_v2:oplus_third_pps_target_voltage_check", 0x320, 0x7100113f },
+        { "oplus_chg_v2:oplus_third_pps_target_voltage_check", 0x350, 0x392fb268 },
+        { "oplus_chg_v2:oplus_pps_gauge_update_work", 0x5c, 0x7100211f },
+        { "oplus_chg_v2:oplus_pps_gauge_update_work", 0xb4, 0x3109651f },
+        { "oplus_chg_v2:oplus_pps_gauge_update_work", 0xc0, 0x71000d1f },
+        { "oplus_chg_v2:oplus_pps_charge_allow_check", 0x78, 0x51002929 },
+        { "oplus_chg_v2:oplus_pps_charge_allow_check", 0x88, 0x51002929 },
     };
     unsigned int i;
-    if ((const u8 *)probes[1].addr != base - 0xde4 ||
-        (const u8 *)probes[2].addr != base - 0x102c ||
-        (const u8 *)probes[3].addr != base - 0xe74)
+    if (READ_ONCE(*(const u32 *)(base + 0x34)) != 0xd1064014 ||
+        READ_ONCE(*(const u32 *)(base + 0x29a8)) != 0x396a5268 ||
+        READ_ONCE(*(const u32 *)(base + 0x31c4)) != 0x396a5268)
         return false;
-    for (i = 0; i < ARRAY_SIZE(anchors); i++)
-        if (READ_ONCE(*(const u32 *)(base + anchors[i].offset)) != anchors[i].word)
+    for (i = 0; i < ARRAY_SIZE(anchors); i++) {
+        struct kprobe check = { .symbol_name = anchors[i].symbol };
+        bool ok;
+        if (register_kprobe(&check)) return false;
+        ok = READ_ONCE(*(const u32 *)((const u8 *)check.addr + anchors[i].offset)) == anchors[i].word;
+        unregister_kprobe(&check);
+        if (!ok)
             return false;
+    }
     return true;
 }
 

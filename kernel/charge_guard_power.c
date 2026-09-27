@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Firmware-pinned, additive MIN votes. No OEM client, PDO or protection edits. */
+/* Capability-checked additive MIN votes. No OEM client, PDO or protection edits. */
 #ifdef CG_POWER_HOST_TEST
 #ifdef __KERNEL__
 #error Host tests cannot be built into a kernel module
@@ -23,6 +23,7 @@
 #include "power_policy.h"
 #define VOTER "CHARGE_GUARD_POWER_VOTER"
 #define DRIVER_ID "pjz110-power-205fb7eb-v1"
+#define VOTE_TYPE_OFFSET 0x324
 struct votable;
 struct oplus_mms;
 struct mms_subscribe;
@@ -56,7 +57,6 @@ static struct oplus_mms *topics[4];
 static struct mms_subscribe *subs[4];
 static const char *topic_names[] = {"wired", "vooc", "ufcs", "pps"};
 static const char *vote_names[] = {NULL, "VOOC_CURR", "UFCS_CURR", "PPS_CURR", "WIRED_ICL"};
-static struct kprobe resolver = { .symbol_name = "oplus_pps_monitor_work" };
 
 static u64 now_ms(void) { return ktime_to_ms(ktime_get_boottime()); }
 static void wake(void)
@@ -172,6 +172,12 @@ static void maintain(struct work_struct *unused)
     if (atomic_read(&events)) goto again;
     v = cg_find(vote_names[protocol]);
     if (!v) { phase = "data_error"; last_error = -ENODEV; goto again; }
+    /* Immutable type, verified by vote()'s implementation contract and live
+     * field-load instruction. A known name alone cannot prove a MIN election. */
+    if (READ_ONCE(*(const int *)((const u8 *)v + VOTE_TYPE_OFFSET)) != 0) {
+        phase = "conflict"; last_error = -EINVAL; enabled = false;
+        clear_votes(); goto out;
+    }
     if (!(dirty_votes & BIT(protocol)) && cg_client_on(v, VOTER)) {
         phase = "conflict"; last_error = -EBUSY; enabled = false; goto out;
     }
@@ -319,17 +325,24 @@ static int resolve(void)
         (void **)&cg_client_on,(void **)&cg_effective,(void **)&cg_topic,
         (void **)&cg_item,(void **)&cg_subscribe,(void **)&cg_unsubscribe,
         (void **)&cg_put,(void **)&cg_vbus};
-    int i, rc = register_kprobe(&resolver);
-    if (rc) return rc;
+    int i, rc = 0;
     for (i = 0; i < ARRAY_SIZE(cg_anchors); i++) {
-        u32 *address = (u32 *)((u8 *)resolver.addr + CG_VOTE_FROM_RESOLVER + cg_anchors[i].offset);
+        struct kprobe resolver = { .symbol_name = cg_anchors[i].symbol };
+        u32 *address;
+        rc = register_kprobe(&resolver);
+        if (rc) break;
+        address = (u32 *)resolver.addr;
+        /* Restore the entry instruction before examining it. pin_driver() holds
+         * the OEM module alive throughout resolution and subsequent calls. */
+        unregister_kprobe(&resolver);
         if (READ_ONCE(address[-1]) != cg_anchors[i].kcfi ||
             READ_ONCE(address[0]) != cg_anchors[i].words[0] ||
             READ_ONCE(address[1]) != cg_anchors[i].words[1] ||
             READ_ONCE(address[2]) != cg_anchors[i].words[2]) { rc = -ENOEXEC; break; }
         *dest[i] = address;
     }
-    unregister_kprobe(&resolver);
+    if (!rc && READ_ONCE(*(const u32 *)((const u8 *)cg_vote + 0x130)) != 0xb9432688)
+        rc = -ENOEXEC; /* ldr w8, [x20, #0x324]: votable->type */
     return rc;
 }
 static int bind_topics(void)
@@ -445,4 +458,4 @@ static void __exit cg_power_exit(void)
 module_init(cg_power_init);
 module_exit(cg_power_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Firmware-pinned additive charge input power ceiling");
+MODULE_DESCRIPTION("Capability-checked additive charge input power ceiling");

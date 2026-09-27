@@ -86,3 +86,9 @@ __pycache__/
 !/kernel/pjz110-power-target.json
 !/kernel/pjz110-power-symbols.json
 !/tools/build_power.py
+
+!/src/driver_contract.rs
+!/src/kernel_probe.rs
+!/kernel/charging-contracts.json
+!/observer/src/com/chargeguard/DexContract.java
+!/observer/src/com/chargeguard/EngineerInfo.java

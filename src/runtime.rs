@@ -1209,6 +1209,29 @@ pub fn hardware_from_environment() -> Result<Hardware> {
     }
     Hardware::production()
 }
+/// Read-only feature inventory. A positive LKM result is eligibility; it never
+/// claims the helper was loaded or that charging performance was measured.
+pub fn probe_capabilities(h: &Hardware) -> Value {
+    let caps = h.capabilities();
+    json!({"api":1,"module_version":crate::VERSION,"boot_id":h.read("/proc/sys/kernel/random/boot_id").ok(),
+        "scope":"static_preflight_not_load_test","device_capabilities":caps,
+        "thermal_nodes":discovery::thermal(h).len(),
+        "engineer_policy":"runtime_battery_and_config_check_required"})
+}
+pub fn probe_install(h: &Hardware) -> Result<Value> {
+    let report = probe_capabilities(h);
+    let path = h.state().join("capabilities-install.json");
+    storage::atomic(
+        &path,
+        &serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+    )?;
+    let caps = h.capabilities();
+    Ok(
+        json!({"report":path,"pps":if caps.pps_verified {"预检通过，加载时继续校验"}else{"暂不支持；详见能力报告"},
+        "power":if caps.power_verified {"预检通过，加载时继续校验"}else{"暂不支持；详见能力报告"},
+        "charging_control_started":false}),
+    )
+}
 pub fn execute(args: &[String]) -> Result<Value> {
     let verb = args.first().map(String::as_str).unwrap_or("status");
     if verb == "version" {
@@ -1236,6 +1259,8 @@ pub fn execute(args: &[String]) -> Result<Value> {
         "ui-status" => ui_status(&h),
         "ui-initial" => ui_initial(&h),
         "diagnose" => diagnose(&h),
+        "probe-capabilities" => Ok(probe_capabilities(&h)),
+        "probe-install" => probe_install(&h),
         "device-info" => Ok(device_info(&h)),
         "logs" => logs(&h),
         "open-repository" | "open-author" => crate::browser::open(verb),

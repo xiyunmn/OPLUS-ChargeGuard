@@ -1,6 +1,7 @@
 {
   "_raw_spin_lock_irqsave": 886768907,
   "_raw_spin_unlock_irqrestore": 3546074736,
+  "memset": 3703006381,
   "module_layout": 1311207223,
   "register_kprobe": 74633019,
   "snprintf": 1701726830,

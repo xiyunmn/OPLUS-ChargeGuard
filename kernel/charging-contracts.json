@@ -1,0 +1,39 @@
+{
+  "power": {
+    "find_votable": "deb0cfca3da78ec8356efa364a80cbbc95bcee1931b9dc8c348efd8af299637d",
+    "g_vooc_curr_table_info": "b2a840534163942d13e10f11f1d67f6739463ebb348428ec3f2893d346c7ce21",
+    "get_client_vote": "318358742ee7b22cbbb889f1f908beff4432e47989ee9c0fd635365a5f2d0fc9",
+    "get_client_vote_locked": "96c3c339a56272b7a7ef42fd55c31f2292db405320b5c4fb0384ee7b91b5a562",
+    "get_effective_result": "cc385b57012291385992f512288c75e3b05104bd1f8a1a8cc099ade0654a48fe",
+    "is_client_vote_enabled": "1fd5a6bc62b6c3cd5c596e7d3d57a0062418a9ac8d33e412044c0dff532285b3",
+    "is_client_vote_enabled_locked": "1bb997e6023ab10555ca1cc33a5015d1a20f9a883575630b397e10ebbb6d42b8",
+    "oplus_cp_7bit_curr_table": "256468fa8b4f05e535ea79daab2a13919032a92869fc8df12e460e307b798828",
+    "oplus_mms_get_by_name": "112607339bcdb36d2b472db43e550947b1e4d3bff67757b881b8419fea9191e9",
+    "oplus_mms_get_item_data": "cbe5aeb28d2fea850ba353e4d7ebd377ba684ed029a1d0c451ca15d8c087778e",
+    "oplus_mms_put": "4f8377b137f02dd6ebab1f364e5e8ed57710f4e3490a425816997e3a5cfcd0ff",
+    "oplus_mms_subscribe": "94e962c26d6f236b1e6411bfed46c14d83426c295b4baac0b50c4e94a43786f5",
+    "oplus_mms_unsubscribe": "77a433fd6fa9d93c4af9157f53b59fd63c7c14d4ee47e7b58136028948dbceac",
+    "oplus_mms_wired_item": "dec78ef1a5da3ac07d59cf02b3cb6a1a0b12a2e1917cbc4f776cefb1dfb6cd4d",
+    "oplus_pps_curr_vote_callback": "983e5055acb3c89be4662243171924b37f25a2ce824a68444364bd219a0230ec",
+    "oplus_pps_item": "031f6664ad7107770059ceba0c0abaf203046142cce8a4b59a8566876b74eea9",
+    "oplus_ufcs_curr_vote_callback": "936e3f4c9effb4021a9ee22311273809fb423cdb12f470c38946396cc5b895f1",
+    "oplus_ufcs_item": "a39dc2df416d37083dfe80b90746edb7ea23b166e1542a5da42e10589457456a",
+    "oplus_vooc_7bit_curr_table": "0ba79fcd2aa292ca25fa442f287a44fb3b075437017c4e82725ecd483de76f7a",
+    "oplus_vooc_curr_vote_callback": "567456546e30217038193fb57b0e4d32bab76d8475735bab59feb6e90b564551",
+    "oplus_vooc_item": "22771cef56a179cccee899c1fa2d54f5ece6f1787af38b1dc15d06fbb5f4793b",
+    "oplus_wired_get_vbus": "3167472d33d702546ca62ca85a0c9efbecfb6dd9db1dd2d29cc24205d979dcdb",
+    "oplus_wired_icl_vote_callback": "d445b718468c31a587dc1da4ef22962ee2d20abe9ccd3a5fe5331f65a3b12224",
+    "vote": "e107843d8ea1dff9ad00621f36618247b94e5e4c37f76f43ee28c6e32d599a4d",
+    "vote_min": "7f579df2bf7f141be63d9037f832ca2dd95cdb6bab27e3149105a96ebbe207a6"
+  },
+  "pps": {
+    "oplus_pps_charge_allow_check": "b458182cff8ecbb033148176d8334d5c240d95037910c827422f99ada6bf68e2",
+    "oplus_pps_gauge_update_work": "6e1f495efa8940b0f6fea5d5382713002f0ab19c1ef98b627b6b03af72680931",
+    "oplus_pps_get_pps_status_info": "0e17a5ef7d1a0a29800465cdd9d736e07f29b1936a764d242546c25281b8a6ff",
+    "oplus_pps_monitor_work": "328ac9a22ad88a7a46aa3fd255bbcbab9015b055ebe9fe2f403cccfcf6f26ef0",
+    "oplus_pps_remove": "aa322a13422eea406ff9e09839a411de806cd06974aa9e6181329ee36b07b70a",
+    "oplus_pps_shutdown": "66717c151fea0708ae0d1120891530c89fe7e4775c94c3cd51b91c6c6ae3f061",
+    "oplus_pps_switch_check_work": "59326c2d0f219962a7ef923bc77f2f11d44ff0084fc424cd6323d525c8e04a49",
+    "oplus_third_pps_target_voltage_check": "69923c626dba5c953174ecdcda1c8a361ea5960db77fcae30f223adc8b317edf"
+  }
+}

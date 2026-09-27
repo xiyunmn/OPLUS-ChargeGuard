@@ -4,7 +4,7 @@ const $=id=>document.getElementById(id);
 const pages={overview:document.title,global:'全局温控',charge:'充电预设',preferences:'设置'};
 const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge_batt_temp_mc','charge_cpu_temp_mc','charge_gpu_temp_mc','charge_ddr_temp_mc'];
 const counts=new Intl.NumberFormat('en-US');
-const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复中',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压'};
+const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复待处理',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压'};
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
@@ -169,6 +169,9 @@ function render(data){
     engineer?.state==='restore_pending'?'恢复未完成，温度覆盖继续暂停，请查看后端详情':
     engineer?.state==='blocked'?'应用失败后已回退；检查后重新保存可重试':
     !s.config?.charge_engineer_policy?'已关闭':
+    engineer?.state==='unsupported'&&engineer.detail?.startsWith('policy_battery_code_contract_changed')?'电池服务相关实现已变化，尚未适配':
+    engineer?.state==='unsupported'&&engineer.detail?.startsWith('policy_rus_query_')?'在线温控配置查询失败，未应用；请查看后端详情':
+    engineer?.state==='unsupported'&&engineer.detail==='policy_rus_override_present'?'检测到在线温控配置，暂不支持覆盖':
     engineer?.state==='unsupported'?'当前固件、在线策略或运行条件不支持，请查看后端详情':
     engineer?.state==='applied'?'配置已应用；充电功率仍由原厂控制':
     s.profile!=='charging'||s.charge_status!=='Charging'?'等待充电，满电后自动恢复':'正在准备或等待恢复完成');
@@ -383,6 +386,7 @@ async function save(event){
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}
   finally{busy=false;controls();await refresh();}
 }
+let exportDialogHistory=false;
 function showExportResult(result){
   const saved=!!result.public_path,path=result.public_path||result.path;
   if(typeof path!=='string'||!path.startsWith('/'))throw Error('未收到有效保存路径');
@@ -390,9 +394,36 @@ function showExportResult(result){
   setText($('export-title'),saved?'日志已导出':'下载目录保存失败');
   setText($('export-description'),saved?'已保存到下载目录，可复制路径查找文件。':'已保留内部副本，访问此位置需要 Root 权限。');
   setText($('export-path'),path);setText($('export-copy-status'),'');
-  if(!dialog.open)dialog.showModal();
+  if(!dialog.open){
+    // KernelSU routes system Back through WebView history. Give the modal one
+    // transient entry so Back dismisses it before leaving the module page.
+    history.pushState({...history.state,chargeGuardExportDialog:true},'');
+    exportDialogHistory=true;dialog.showModal();
+  }
 }
-$('export-close').onclick=()=>$('export-dialog').close();
+const exportDialog=$('export-dialog');
+let exportBackdropPress=false;
+function outsideExportDialog(event){
+  const box=exportDialog.getBoundingClientRect();
+  return event.target===exportDialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom);
+}
+exportDialog.addEventListener('pointerdown',event=>{exportBackdropPress=outsideExportDialog(event);});
+exportDialog.addEventListener('pointercancel',()=>{exportBackdropPress=false;});
+exportDialog.addEventListener('click',event=>{
+  if(exportBackdropPress&&outsideExportDialog(event))exportDialog.close();
+  exportBackdropPress=false;
+});
+exportDialog.addEventListener('cancel',event=>{event.preventDefault();exportDialog.close();});
+exportDialog.addEventListener('close',()=>{
+  exportBackdropPress=false;
+  if(exportDialogHistory){
+    exportDialogHistory=false;
+    if(history.state?.chargeGuardExportDialog)history.back();
+  }
+});
+window.addEventListener('popstate',()=>{
+  if(exportDialogHistory){exportDialogHistory=false;if(exportDialog.open)exportDialog.close();}
+});
 $('export-copy').onclick=async()=>{
   const button=$('export-copy'),path=$('export-path').textContent;button.disabled=true;
   let copied=false;

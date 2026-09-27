@@ -106,7 +106,13 @@ impl Hardware {
             .clone()
     }
     pub fn refresh_capabilities(&self) {
-        *self.capabilities.write().unwrap() = None;
+        let mut cached = self.capabilities.write().unwrap();
+        if cached
+            .as_ref()
+            .is_some_and(|c| c.evidence_stamp != crate::capabilities::evidence_stamp(self))
+        {
+            *cached = None;
+        }
     }
     #[cfg(any(test, all(feature = "fixtures", not(target_os = "android"))))]
     pub fn fixture_capabilities(&self, profile: crate::capabilities::Capabilities) {

@@ -7,11 +7,10 @@ NAMES=('vote','find_votable','get_client_vote','is_client_vote_enabled',
        'oplus_mms_subscribe','oplus_mms_unsubscribe','oplus_mms_put','oplus_wired_get_vbus')
 
 def write_anchors(profile, path):
-    text='#define CG_VOTE_FROM_RESOLVER (%d)\n'%profile['vote_from_resolver']
-    text+='static const struct { long offset; unsigned kcfi, words[3]; } cg_anchors[] = {\n'
+    text='static const struct { const char *symbol; unsigned kcfi, words[3]; } cg_anchors[] = {\n'
     for name in NAMES:
         a=profile['anchors'][name]
-        text+=' {%d,0x%08x,{%s}}, /* %s */\n'%(a['relative_to_vote'],a['kcfi'],','.join('0x%08x'%x for x in a['entry']),name)
+        text+=' {"oplus_chg_v2:%s",0x%08x,{%s}},\n'%(name,a['kcfi'],','.join('0x%08x'%x for x in a['entry']))
     path.write_text(text+'};\n',encoding='ascii')
 
 def build(llvm,output):

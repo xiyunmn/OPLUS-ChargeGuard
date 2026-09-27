@@ -7,8 +7,8 @@ case "$cg_sdk" in ''|*[!0-9]*) abort "无法识别 Android 版本" ;; esac
 cg_brand=$(getprop ro.product.brand | tr '[:upper:]' '[:lower:]')
 cg_maker=$(getprop ro.product.manufacturer | tr '[:upper:]' '[:lower:]')
 case "$cg_brand:$cg_maker" in
-  oppo:*|oneplus:*|realme:*|oplus:*|*:oppo|*:oneplus|*:realme|*:oplus) ;;
-  *) abort "此版本面向 OPLUS（OPPO / 一加 / realme）设备" ;;
+  oppo:*|oneplus:*|realme:*|*:oppo|*:oneplus|*:realme) ;;
+  *) abort "需要 OPPO / OnePlus / Realme 品牌或制造商" ;;
 esac
 for cg_dir in /data/adb/modules/*; do
   [ -d "$cg_dir" ] || continue
@@ -25,6 +25,8 @@ for cg_script in service.sh post-fs-data.sh action.sh uninstall.sh; do
   set_perm "$MODPATH/$cg_script" 0 0 0755
 done
 "$MODPATH/bin/cg" init-config || abort "无法准备配置目录"
+ui_print "正在只读探测设备能力（不启用充电控制）…"
+"$MODPATH/bin/cg" probe-install || ui_print "能力报告保存失败；启用功能时将重新探测"
 cg_name=$(sed -n 's/^name=//p' "$MODPATH/module.prop")
 cg_version=$(sed -n 's/^version=//p' "$MODPATH/module.prop")
 ui_print "$cg_name  $cg_version"

@@ -1,6 +1,7 @@
 //! Bounded, nonblocking child stdout. No reader thread can outlive a timeout.
 use serde::Serialize;
 use std::{
+    ffi::OsString,
     io::{self, Read},
     os::{fd::AsRawFd, unix::process::CommandExt},
     process::{Command, Stdio},
@@ -33,6 +34,36 @@ pub enum Progress {
     Limit,
 }
 
+// Android's content command starts app_process. ART needs these boot-provided
+// paths/classpaths even though the child must not inherit arbitrary shell state.
+const ANDROID_ENV: &[&str] = &[
+    "ANDROID_ROOT",
+    "ANDROID_DATA",
+    "ANDROID_ART_ROOT",
+    "ANDROID_I18N_ROOT",
+    "ANDROID_TZDATA_ROOT",
+    "ANDROID_RUNTIME_ROOT",
+    "BOOTCLASSPATH",
+    "DEX2OATBOOTCLASSPATH",
+];
+fn isolated_command(
+    program: &str,
+    args: &[&str],
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", "/system/bin:/usr/bin:/bin");
+    for (name, value) in inherited {
+        if ANDROID_ENV.iter().any(|allowed| name == *allowed) {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
 pub fn run<F: FnMut(&[u8]) -> Progress>(
     program: &str,
     args: &[&str],
@@ -47,10 +78,7 @@ pub fn run<F: FnMut(&[u8]) -> Progress>(
         child_reaped: false,
         exit_code: None,
     };
-    let Ok(mut child) = Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/system/bin:/usr/bin:/bin")
+    let Ok(mut child) = isolated_command(program, args, std::env::vars_os())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -193,4 +221,45 @@ pub fn text(program: &str, args: &[&str], timeout_ms: u64, max: usize) -> crate:
     String::from_utf8(out)
         .map(|s| s.trim().to_owned())
         .map_err(|_| "command_invalid_utf8".into())
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    #[test]
+    fn framework_environment_is_preserved_but_shell_and_loader_overrides_are_not() {
+        let mut environment: Vec<(OsString, OsString)> = ANDROID_ENV
+            .iter()
+            .map(|key| ((*key).into(), format!("/platform/{key}").into()))
+            .collect();
+        for key in [
+            "PATH",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "CLASSPATH",
+            "BASH_ENV",
+            "HOME",
+        ] {
+            environment.push((key.into(), "/untrusted".into()));
+        }
+        let command = isolated_command("/system/bin/content", &["query"], environment);
+        let values: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+        assert_eq!(values.len(), ANDROID_ENV.len() + 1);
+        for key in ANDROID_ENV {
+            assert_eq!(
+                values[std::ffi::OsStr::new(key)].unwrap(),
+                std::ffi::OsStr::new(&format!("/platform/{key}"))
+            );
+        }
+        assert_eq!(
+            values[std::ffi::OsStr::new("PATH")].unwrap(),
+            "/system/bin:/usr/bin:/bin"
+        );
+        let empty = isolated_command("/system/bin/content", &["query"], []);
+        assert_eq!(
+            empty.get_envs().count(),
+            1,
+            "missing runtime variables must not be guessed"
+        );
+    }
 }

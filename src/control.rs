@@ -748,7 +748,8 @@ impl Controller {
         };
         let action = (|| -> Result<String> {
             validate_operation(op)?;
-            if !h.capabilities().pps_verified {
+            if !h.capabilities().power_verified {
+                result.detail = h.capabilities().power_probe_error;
                 return Ok("unsupported".into());
             }
             let previous = self.journal.entries.get(&op.id).cloned();

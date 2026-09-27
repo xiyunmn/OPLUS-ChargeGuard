@@ -6,7 +6,7 @@ RUNTIME=('module.prop','customize.sh','service.sh','post-fs-data.sh','uninstall.
          'webroot/index.html','webroot/style.css','webroot/theme.js','webroot/bridge.js','webroot/app.js',
          'META-INF/com/google/android/update-binary','META-INF/com/google/android/updater-script')
 SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattributes','.gitignore')
-BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py',
+BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py','kernel/charging-contracts.json',
                'kernel/charge_guard_power.c','kernel/power_policy.h','kernel/pjz110-power-target.json','kernel/pjz110-power-symbols.json',
                'kernel/charge_guard_pps.c','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
                '.github/workflows/beta.yml','.github/workflows/release.yml',
@@ -181,7 +181,7 @@ def build(a,m):
     s=re.sub(r'<p class="version">.*?</p>','<p class="version">'+html.escape(m['version'])+'</p>',s)
     index.write_text(s,encoding='utf-8',newline='\n')
     android=sdk/'platforms/android-35/android.jar'
-    run([javac,'-encoding','UTF-8','-source','8','-target','8','-Xlint:-options','-classpath',android,'-d',classes,ROOT/'observer/src/com/chargeguard/CameraEvents.java'])
+    run([javac,'-encoding','UTF-8','-source','8','-target','8','-Xlint:-options','-classpath',android,'-d',classes,*sorted((ROOT/'observer/src').rglob('*.java'))])
     run([java,'-cp',sdk/'build-tools/36.0.0/lib/d8.jar','com.android.tools.r8.D8','--min-api','35','--lib',android,'--output',dex,*sorted(classes.rglob('*.class'))])
     (stage/'bin').mkdir()
     with zipfile.ZipFile(stage/'bin/cg-camera.jar','w',zipfile.ZIP_DEFLATED) as z:

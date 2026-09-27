@@ -11,6 +11,7 @@
   "fortify_panic": 3419703692,
   "init_timer_key": 2043632007,
   "ktime_get_with_offset": 3304118802,
+  "memset": 3703006381,
   "misc_deregister": 439861025,
   "misc_register": 3469056447,
   "mod_delayed_work_on": 3304354337,

@@ -6,8 +6,6 @@ pub const ID: &str = "charge_power_limit";
 pub const DEVICE: &str = "/dev/charge_guard_power";
 pub const STATUS: &str = "/sys/module/charge_guard_power/parameters/status";
 pub const DRIVER_ID: &str = "pjz110-power-205fb7eb-v1";
-const FINGERPRINT: &str =
-    "OnePlus/PJZ110/OP5D0DL1:17/CP2A.260605.016/V.34246cc-e2d62b-e2d628:user/release-keys";
 #[derive(Clone, Debug, Serialize)]
 pub struct Status {
     pub ready: bool,
@@ -96,9 +94,6 @@ pub fn status(h: &Hardware) -> Result<Status> {
     parse_status(&h.read(STATUS)?)
 }
 pub fn check_available(h: &Hardware) -> Result<()> {
-    if !h.fixture && h.prop("ro.build.fingerprint")? != FINGERPRINT {
-        return Err("power_firmware_not_supported".into());
-    }
     if h.present("/sys/module/charge_guard_power")? {
         let s = status(h)?;
         if s.session || s.enabled || s.pending {
@@ -130,9 +125,10 @@ pub struct Session {
 impl Session {
     pub fn apply(&mut self, h: &Hardware, desired: &str) -> Result<Status> {
         let (_, watts, mask) = settings(desired)?;
-        if !h.capabilities().pps_verified {
+        if !h.capabilities().power_verified {
             return Err("power_firmware_not_supported".into());
         }
+        crate::capabilities::confirm_loaded(h)?;
         if !h.present("/sys/module/charge_guard_power")? {
             load(h)?;
         }
@@ -238,9 +234,6 @@ fn fixture_status(h: &Hardware, w: u32, m: u32, on: bool, state: &str) -> Result
     std::fs::write(h.path(STATUS),format!("api=1 driver={DRIVER_ID} ready=1 enabled={} session={} watts={w} mask={m} protocol=0 voltage_mv=0 cap_ma=0 effective_ma=0 pending=0 state={state} error=0\n",on as u8,on as u8)).map_err(|e|e.to_string())
 }
 fn load(h: &Hardware) -> Result<()> {
-    if !h.fixture && h.prop("ro.build.fingerprint")? != "OnePlus/PJZ110/OP5D0DL1:17/CP2A.260605.016/V.34246cc-e2d62b-e2d628:user/release-keys" {
-        return Err("power_firmware_not_supported".into());
-    }
     #[cfg(any(test, all(feature = "fixtures", not(target_os = "android"))))]
     if h.fixture {
         std::fs::create_dir_all(h.path("/sys/module/charge_guard_power/parameters"))

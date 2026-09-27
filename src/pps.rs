@@ -71,6 +71,7 @@ pub fn prepare(h: &Hardware) -> Result<()> {
     if !h.capabilities().pps_verified {
         return Err("pps_firmware_not_supported".into());
     }
+    crate::capabilities::confirm_loaded(h)?;
     if !h.present("/sys/module/charge_guard_pps")? {
         load(h)?;
     }

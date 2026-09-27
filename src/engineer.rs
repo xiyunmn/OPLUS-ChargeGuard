@@ -14,10 +14,6 @@ pub const ID: &str = "engineer_charge_policy";
 pub const TARGET: &str = "/odm/etc/temperature_profile/sys_thermal_control_config.xml";
 pub const SOURCE: &str = "/dev/charge_guard_masks/engineer_policy.xml";
 pub const XML_HASH: &str = "fdc725560c4ac3f6c1a5adcecb2fd67ac924f1897eee4ec1eb85456a485ad105";
-const APK: &str = "/system_ext/app/Battery/Battery.apk";
-const APK_HASH: &str = "cc6f88a699fea48f94f1120da03964f7906947b964ec6688761dfbad3bf54bdc";
-const FINGERPRINT: &str =
-    "OnePlus/PJZ110/OP5D0DL1:17/CP2A.260605.016/V.34246cc-e2d62b-e2d628:user/release-keys";
 const COMPONENT: &str = "com.oplus.battery/com.oplus.battery.OplusBatteryService";
 const MAX_XML: usize = 512 * 1024;
 
@@ -177,6 +173,40 @@ fn tags(xml: &str) -> Result<Vec<Tag>> {
 /// policy trees are never changed. No extracted firmware is shipped in source.
 pub fn transform(xml: &str) -> Result<String> {
     let parsed = tags(xml)?;
+    for required in [
+        vec!["sys_thermal_control_list", "thermalPolicyConfigItem"],
+        vec![
+            "sys_thermal_control_list",
+            "thermalPolicyConfigItem",
+            "specific",
+            "com.oplus.engineermode",
+        ],
+        vec![
+            "sys_thermal_control_list",
+            "thermalPolicyConfigItem",
+            "globalPolicy",
+            "globalPolicy",
+        ],
+    ] {
+        if parsed.iter().filter(|t| t.path == required).count() != 1 {
+            return Err("policy_schema_ambiguous".into());
+        }
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for tag in &parsed {
+        if tag.path.last().map(String::as_str) == Some("gear_config") {
+            let gear = tag
+                .attrs
+                .get("tempGear")
+                .ok_or("policy_missing_tempGear")?
+                .0
+                .parse::<u32>()
+                .map_err(|_| "policy_bad_tempGear")?;
+            if gear > 19 || !unique.insert((tag.path.clone(), gear)) {
+                return Err("policy_gears_ambiguous".into());
+            }
+        }
+    }
     let mut gears = BTreeMap::new();
     let number = |tag: &Tag, key: &str| -> Result<u32> {
         tag.attrs
@@ -287,11 +317,17 @@ pub fn sources_clear(h: &Hardware) -> Result<()> {
         ],
         3000,
         16384,
-    )?;
-    if result != "No result found." {
-        return Err("policy_rus_override_or_unknown".into());
+    )
+    .map_err(|error| format!("policy_rus_query_failed:{error}"))?;
+    rus_source_clear(&result)
+}
+fn rus_source_clear(result: &str) -> Result<()> {
+    match result.trim() {
+        "No result found." => Ok(()),
+        "" => Err("policy_rus_query_empty".into()),
+        value if value.starts_with("Row: ") => Err("policy_rus_override_present".into()),
+        _ => Err("policy_rus_query_unrecognized".into()),
     }
-    Ok(())
 }
 pub fn identity(h: &Hardware) -> Result<()> {
     if h.fixture {
@@ -301,14 +337,26 @@ pub fn identity(h: &Hardware) -> Result<()> {
             Err("policy_firmware_not_supported".into())
         };
     }
-    if h.prop("ro.build.fingerprint")? != FINGERPRINT || hash(h, APK, 32 * 1024 * 1024)? != APK_HASH
+    let classpath = format!("-Djava.class.path={}/bin/cg-camera.jar", crate::MODULE);
+    let output = command::text(
+        "/system/bin/app_process",
+        &[&classpath, "/system/bin", "com.chargeguard.EngineerInfo"],
+        8000,
+        4096,
+    )
+    .map_err(|e| format!("policy_battery_contract_check:{e}"))?;
+    let info: serde_json::Value =
+        serde_json::from_str(&output).map_err(|_| "policy_battery_contract_response")?;
+    if info["api"] != 1
+        || info["compatible"] != true
+        || info["uid"] != 1000
+        || info["process"] != "com.oplus.athena"
     {
-        return Err("policy_firmware_not_supported".into());
-    }
-    if command::text("/system/bin/pm", &["path", "com.oplus.battery"], 2000, 4096)?
-        != format!("package:{APK}")
-    {
-        return Err("policy_battery_apk_replaced".into());
+        return Err(info["error"]
+            .as_str()
+            .filter(|s| s.starts_with("policy_") && s.len() < 256)
+            .unwrap_or("policy_battery_contract_unsupported")
+            .to_owned());
     }
     Ok(())
 }
@@ -336,6 +384,8 @@ pub struct Session {
     pub app_start: Option<String>,
     #[serde(default)]
     pub reload_before: Option<(u32, String)>,
+    #[serde(default)]
+    pub reload_method: u32,
     pub source_checked_ms: u64,
     pub failed: bool,
 }
@@ -363,9 +413,6 @@ pub fn prepare(h: &Hardware) -> Result<Session> {
     }
     let input = xml(h)?;
     let original_hash = digest(input.as_bytes());
-    if !h.fixture && original_hash != XML_HASH {
-        return Err("policy_config_not_supported".into());
-    }
     let overlay = transform(&input)?;
     Ok(Session {
         phase: Phase::Prepared,
@@ -375,6 +422,7 @@ pub fn prepare(h: &Hardware) -> Result<Session> {
         app_pid: None,
         app_start: None,
         reload_before: None,
+        reload_method: 2,
         source_checked_ms: crate::runtime::now_ms(),
         failed: false,
     })
@@ -495,6 +543,52 @@ fn app_view(h: &Hardware, expected: &str) -> Result<(u32, String)> {
     }
     Ok(p)
 }
+fn terminate_process(h: &Hardware, expected: &(u32, String)) -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    // pidfd prevents a recycled PID from receiving our signal. The caller has
+    // already persisted a reload checkpoint; no UID-wide kill or force-stop.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, expected.0, 0) };
+    if fd < 0 {
+        return Err(format!(
+            "policy_pidfd_open:{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let file = unsafe { fs::File::from_raw_fd(fd as i32) };
+    if process(h).as_ref() != Ok(expected) {
+        return Err("policy_app_changed_before_reload".into());
+    }
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                file.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+            return Err(format!(
+                "policy_app_signal:{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut event = libc::pollfd {
+            fd: file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut event, 1, 1500) };
+        if rc > 0 && event.revents & libc::POLLIN != 0 {
+            return Ok(());
+        }
+        if rc < 0 {
+            return Err("policy_app_exit_wait_failed".into());
+        }
+    }
+    Err("policy_app_exit_not_confirmed".into())
+}
 fn reload(h: &Hardware, expected: &str) -> Result<(u32, String)> {
     let before = process(h).ok();
     if h.fixture {
@@ -508,14 +602,8 @@ fn reload(h: &Hardware, expected: &str) -> Result<(u32, String)> {
         fs::write(h.path("/engineer/view"), expected).map_err(|e| e.to_string())?;
         return app_view(h, expected);
     }
-    let stop = command::text(
-        "/system/bin/am",
-        &["force-stop", "--user", "0", "com.oplus.battery"],
-        4000,
-        4096,
-    )?;
-    if !stop.is_empty() {
-        return Err("policy_app_stop_unconfirmed".into());
+    if let Some(ref previous) = before {
+        terminate_process(h, previous)?;
     }
     let start = command::text(
         "/system/bin/am",
@@ -588,6 +676,7 @@ pub fn apply(
             return Err("policy_mount_hash_mismatch".into());
         }
         s.phase = Phase::ReloadApply;
+        s.reload_method = 2;
         s.reload_before = process(h).ok();
         persist(s)?;
         let p = reload(h, &s.overlay_hash)?;
@@ -636,6 +725,7 @@ pub fn restore(
         }
         if touched {
             s.phase = Phase::ReloadRestore;
+            s.reload_method = 2;
             s.reload_before = process(h).ok();
             persist(s)?;
             let p = reload(h, &s.original_hash)?;
@@ -647,9 +737,23 @@ pub fn restore(
             return Err("policy_restore_mount_reappeared".into());
         }
         // A previous reload was issued; read-only confirmation only, no restart loop.
-        let current = app_view(h, &s.original_hash)?;
-        if Some(current) == s.reload_before {
-            return Err("policy_restore_reload_not_observed".into());
+        if hash(h, TARGET, MAX_XML)? != s.original_hash {
+            return Err("policy_restore_original_mismatch".into());
+        }
+        if s.reload_method < 2 {
+            // Upgrade a legacy force-stop checkpoint once, including unplugged
+            // recovery. Persist consumption before touching the exact process.
+            s.reload_method = 2;
+            s.reload_before = process(h).ok();
+            persist(s)?;
+            let p = reload(h, &s.original_hash)?;
+            s.app_pid = Some(p.0);
+            s.app_start = Some(p.1);
+        } else {
+            let current = app_view(h, &s.original_hash)?;
+            if Some(current) == s.reload_before {
+                return Err("policy_restore_reload_not_observed".into());
+            }
         }
     }
     if h.present(SOURCE)? {
@@ -666,6 +770,25 @@ pub fn restore(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rus_query_requires_an_explicit_empty_result() {
+        assert!(rus_source_clear("No result found.\n").is_ok());
+        for (output, error) in [
+            ("", "policy_rus_query_empty"),
+            ("  \n", "policy_rus_query_empty"),
+            (
+                "Row: 0 filtername=sys_thermal_control_list",
+                "policy_rus_override_present",
+            ),
+            (
+                "Error while accessing provider",
+                "policy_rus_query_unrecognized",
+            ),
+            ("Warning\nNo result found.", "policy_rus_query_unrecognized"),
+        ] {
+            assert_eq!(rus_source_clear(output).unwrap_err(), error);
+        }
+    }
     #[test]
     fn charge_only_overlay_leaves_safety_and_other_gears_intact() {
         let xml = r#"<sys_thermal_control_list><thermalPolicyConfigItem><globalPolicy><globalPolicy><gear_config tempGear="3" cpu="2" charge="7"/><gear_config tempGear="8" charge="3"/></globalPolicy></globalPolicy><specific><com.oplus.engineermode><gear_config tempGear="3" charge="30"/></com.oplus.engineermode></specific><safetyTest><safety_test><gear_config tempGear="3" charge="1"/></safety_test></safetyTest></thermalPolicyConfigItem></sys_thermal_control_list>"#;
