@@ -19,11 +19,30 @@
       const cb='chargeGuardCallback'+(++sequence);let done=false;
       const finish=(err,value)=>{if(done)return;done=true;clearTimeout(timer);delete root[cb];if(err)reject(err);else resolve(value);};
       const timer=setTimeout(()=>finish(Error('命令超时；执行结果未知，请刷新，勿直接假定成功')),timeout);
-      root[cb]=(code,stdout,stderr)=>{
+      const receive=(code,stdout,stderr)=>{
         if(Number(code)!==0)return finish(Error(String(stderr||'后端执行失败').slice(0,1200)));
         try{finish(null,JSON.parse(String(stdout)));}catch(e){finish(Error('后端返回格式错误'));}
       };
-      try{root.ksu.exec(cmd,'{}',cb);}catch(e){finish(e);}
+      // KernelSU exec may block its JS interface thread until completion.
+      // spawn enqueues export; its small result contains paths, never log bytes.
+      if(verb==='export'&&typeof root.ksu.spawn==='function'){
+        let stdout='',stderr='';
+        const collect=stream=>({emit:(_event,data)=>{
+          if(done)return;
+          if(stream==='stdout')stdout+=String(data)+'\n';else stderr+=String(data)+'\n';
+          if(stdout.length+stderr.length>16384)finish(Error('导出返回过大；请检查下载目录中的结果'));
+        }});
+        // KernelSU emits data on the streams, but exit/error on the process.
+        root[cb]={stdout:collect('stdout'),stderr:collect('stderr'),emit:(event,value)=>{
+          if(done)return;
+          if(event==='exit')receive(value,stdout,stderr);
+          else if(event==='error')finish(Error(value?.message||'导出进程启动失败'));
+        }};
+        try{root.ksu.spawn(executable,JSON.stringify(['export']),'{}',cb);}catch(e){finish(e);}
+      }else{
+        root[cb]=receive;
+        try{root.ksu.exec(cmd,'{}',cb);}catch(e){finish(e);}
+      }
     });
   }
   function hex(value){return Array.from(new TextEncoder().encode(JSON.stringify(value)),b=>b.toString(16).padStart(2,'0')).join('');}

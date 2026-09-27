@@ -33,7 +33,7 @@
 <main id="content"><div id="message" class="notice" role="status" hidden></div><form id="settings">
 <section id="page-overview" role="tabpanel" aria-labelledby="tab-overview">
   <div class="card battery-card">
-    <div class="battery-heading"><p>电池接口温度</p><span class="charge-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span id="charge-state">—</span></span></div>
+    <div class="battery-heading"><p>电池接口温度</p><div class="charge-badges"><span class="charge-badge protocol-badge" id="charge-protocol" title="系统上报的充电协议" hidden>—</span><span class="charge-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span id="charge-state">—</span></span></div></div>
     <div class="battery-reading"><div><div class="battery-value"><span id="temp">—</span><small>℃</small></div><p id="battery-note">等待接口读取</p></div><div class="battery-side"><div><strong id="capacity">—</strong><small id="capacity-unit" hidden>%</small></div><span>电池电量</span></div></div>
     <div class="target-strip"><span id="target-label">配置目标</span><strong>BAT <span id="target-battery">—</span></strong><strong>CPU <span id="target-cpu">—</span></strong><strong>GPU <span id="target-gpu">—</span></strong><strong>DDR <span id="target-ddr">—</span></strong></div>
   </div>
@@ -108,13 +108,13 @@
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_engineer_policy">售后充电分档</label><p class="hint">采用原厂售后充电分档，随温度调整；保留满电收尾。生效和恢复时会短暂重载电池服务。</p><p class="hint" id="engineer-policy-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_engineer_policy" class="switch" type="checkbox" aria-describedby="engineer-policy-status"></div></div>
   <div class="card power-card" id="power-limit-card">
     <div class="setting-row power-heading"><label for="charge_power_limit_enabled">最大充电功率</label><input id="charge_power_limit_enabled" class="switch" type="checkbox" aria-describedby="power-limit-note power-limit-status"></div>
-    <p class="hint" id="power-limit-note">原厂允许时尽量贴近上限，保留温控降流与满电收尾。</p>
+    <p class="hint" id="power-limit-note">原厂允许时尽量贴近 USB 输入上限；受档位与调整延迟影响，保留温控降流及满电收尾。</p>
     <div id="power-limit-controls">
       <div class="power-value-row"><label for="charge_power_limit_watts">USB 输入上限</label><div class="power-reading"><output id="charge_power_limit_watts_value" for="charge_power_limit_watts" aria-label="功率上限（瓦）">50</output><span aria-hidden="true">W</span></div></div>
       <div class="power-slider"><input id="charge_power_limit_watts" type="range" min="20" max="100" step="1" value="50" aria-valuetext="50瓦"><div class="scale" aria-hidden="true"><span>20 W</span><span>100 W</span></div></div>
       <fieldset class="power-protocols"><legend>生效协议<span>可多选</span></legend>
         <div class="protocol-grid">
-          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="supervooc" checked><span class="protocol-option"><span>SuperVooc</span><span class="protocol-check" aria-hidden="true"></span></span></label>
+          <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="supervooc" checked><span class="protocol-option"><span>SuperVOOC</span><span class="protocol-check" aria-hidden="true"></span></span></label>
           <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="ufcs"><span class="protocol-option"><span>UFCS</span><span class="protocol-check" aria-hidden="true"></span></span></label>
           <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="pps"><span class="protocol-option"><span>PPS</span><span class="protocol-check" aria-hidden="true"></span></span></label>
           <label class="protocol-choice"><input type="checkbox" name="charge_power_limit_protocols" value="pd"><span class="protocol-option"><span>PD</span><span class="protocol-check" aria-hidden="true"></span></span></label>
@@ -122,7 +122,7 @@
       </fieldset>
     </div>
   </div>
-  <div class="power-caption"><p class="hint">硬件档位与原厂限制可能使实际功率更低，瞬时功率存在调整延迟。</p><p class="hint" id="power-limit-status" role="status">默认关闭 · 默认仅 SuperVooc</p></div>
+  <div class="power-caption"><p class="hint" id="power-limit-status" role="status">默认关闭 · 默认仅 SuperVOOC</p></div>
   <p class="hint" id="engineer-conflict-hint" hidden>以下设置由售后充电分档临时接管，原值已保留；关闭后恢复可编辑。</p>
   <div class="card horae-card" id="charge-horae-card"><div class="setting-row"><label for="charge_horae_enabled">充电 Horae 调整</label><input id="charge_horae_enabled" class="switch" type="checkbox" checked></div>
     <div class="segmented solid" role="group" aria-label="充电 Horae 模式"><label><input name="charge_horae_mode" type="radio" value="charging"><span>充电时禁用</span></label><label><input name="charge_horae_mode" type="radio" value="smart" checked><span>智能调整</span></label></div>
@@ -169,7 +169,7 @@
     <div class="setting-row preference-choice"><div><h2>外观</h2><p class="hint" id="theme-hint">跟随系统</p></div><div class="segmented" role="group" aria-label="主题"><label><input type="radio" name="theme" value="light"><span>浅色</span></label><label><input type="radio" name="theme" value="dark"><span>深色</span></label><label><input type="radio" name="theme" value="system" checked><span>系统</span></label></div></div>
     <div class="setting-row"><div><h2 id="dpi-label">界面 DPI</h2><p class="hint">85%～115% · 即时保存</p></div><div class="dpi-controls" role="group" aria-labelledby="dpi-label"><button type="button" id="dpi-decrease" class="icon-button" aria-label="缩小界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="dpi-value" aria-live="polite">100%</output><button type="button" id="dpi-increase" class="icon-button" aria-label="放大界面5%"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg></button><button type="button" id="dpi-reset" class="dpi-reset" aria-label="恢复默认界面比例100%">默认</button></div></div>
     <div class="setting-row preference-choice"><div><h2>写入模式</h2><p class="hint" id="write-mode-hint">默认使用事件驱动</p></div><div class="segmented solid" role="group" aria-label="温控写入模式"><label><input type="radio" name="write_mode" value="loop"><span>循环维护写入</span></label><label><input type="radio" name="write_mode" value="event" checked><span>事件驱动写入</span></label></div></div>
-    <div class="setting-row"><div><label for="detailed_logging">详细日志</label><p class="hint">默认关闭 · 按大小轮转保留</p></div><input id="detailed_logging" class="switch" type="checkbox"></div>
+    <div class="setting-row"><div><label for="detailed_logging">详细日志</label><p class="hint">默认关闭 · 最多 10 MiB，约 50 分钟，随事件量变化</p></div><input id="detailed_logging" class="switch" type="checkbox"></div>
     <p id="logging-error" class="hint error-text" hidden></p>
   </div>
   <div class="card diagnostic-card"><div class="card-heading"><div class="heading-title"><h2>运行诊断</h2><span class="small-badge" id="diagnostic-state">等待连接</span></div><button class="small-action backend" type="button" id="export"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg><span>导出</span></button></div>
@@ -208,4 +208,10 @@
 <button type="button" id="tab-charge" role="tab" aria-controls="page-charge" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span>充电</span></button>
 <button type="button" id="tab-preferences" role="tab" aria-controls="page-preferences" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span>设置</span></button>
 </nav>
+<dialog class="export-dialog" id="export-dialog" aria-labelledby="export-title" aria-describedby="export-description">
+  <div class="export-dialog-heading"><span class="export-dialog-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg></span><div><h2 id="export-title">日志已导出</h2><p class="hint" id="export-description">已保存到下载目录</p></div></div>
+  <div class="export-path-box"><p>保存位置</p><div id="export-path" tabindex="0"></div></div>
+  <p class="export-copy-status hint" id="export-copy-status" role="status" aria-live="polite"></p>
+  <div class="export-dialog-actions"><button class="secondary" id="export-close" type="button">完成</button><button class="primary" id="export-copy" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制路径</span></button></div>
+</dialog>
 </body></html>

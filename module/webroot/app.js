@@ -9,7 +9,7 @@ const profileNames={charging:'充电独立预设',global:'全局温控预设',id
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
 let requestEpoch=0,pollGeneration=0,pollTimer=null,pollingActive=false,viewOpen=true,startupPresented=false;
-let config=null,dirty=false,busy=false,refreshing=false,loadingLogs=false,loadingNodes=false;
+let config=null,dirty=false,busy=false,exporting=false,refreshing=false,loadingLogs=false,loadingNodes=false;
 let currentPage='overview',lastStatus=null,nodeIdentity='',nodeFilter='all',logFilter='all',backendFilter='all';
 let diagnosticTab='logs',diagnosticExpanded=false,nodes=[],logEntries=[],logsLoaded=false;
 const pageScroll=new Map(),logRecords=new Map(),backendRecords=new Map();
@@ -45,6 +45,7 @@ function controls(){
   }
   for(const node of $('power-limit-controls').querySelectorAll('input'))node.disabled=unavailable||!config||!$('charge_power_limit_enabled').checked;
   $('power-limit-controls').classList.toggle('temporarily-disabled',!$('charge_power_limit_enabled').checked);
+  $('export').disabled=unavailable||exporting;
   $('savebar').hidden=!dirty||currentPage==='overview';
 }
 function labels(){
@@ -124,7 +125,7 @@ async function loadNodes(){
   finally{loadingNodes=false;}
 }
 function clearTelemetry(){
-  nodes=[];nodeIdentity='';
+  nodes=[];nodeIdentity='';$('charge-protocol').hidden=true;
   for(const id of ['temp','capacity','mounts','profile','round','detected','pid','diagnostic-round','diagnostic-errors','target-battery','target-cpu','target-gpu','target-ddr'])setText($(id),'—');
   $('capacity-unit').hidden=true;$('groups').replaceChildren();$('camera-hint').hidden=true;setText($('battery-note'),'等待最新接口读取');
   setText($('target-label'),'配置目标');$('diagnostic-errors').classList.remove('has-errors');
@@ -141,12 +142,16 @@ function render(data){
   $('start').hidden=!!active;$('stop').hidden=!active;
   setText($('freshness'),number(data.age_ms)==null?'尚无记录':(data.age_ms/1000).toFixed(1)+' 秒前更新');
   setText($('runtime-mode'),fresh?(idle?'未应用预设':s.write_mode==='event'?'事件维护':'循环维护'):'等待连接');
-  setText($('charge-state'),fresh?(chargeNames[s.charge_status]||'状态未知'):'—');
+  const chargeStatus=s.battery?.status??s.charge_status;
+  setText($('charge-state'),fresh?(chargeNames[chargeStatus]||'状态未知'):'—');
+  const protocol=s.battery?.protocol;
+  $('charge-protocol').hidden=!fresh||chargeStatus!=='Charging';
+  setText($('charge-protocol'),protocol?.label||'协议未知');
   const reason=fresh?(idle?(s.config?.charge_trigger?'等待充电，当前未应用运行时控制':'预设已关闭，核心保持观察'):''):(active?'守护进程继续维护，请稍后刷新':'点击启动核心恢复观察');
   setText($('reason'),reason);$('reason').hidden=!reason;
   const ops=Array.isArray(s.backends)?s.backends:[];
   const powerOp=ops.find(op=>op.id==='charge_power_limit'),power=s.power_limit;
-  const protocolNames={1:'SuperVooc',2:'UFCS',3:'PPS',4:'PD'};
+  const protocolNames={1:'SuperVOOC',2:'UFCS',3:'PPS',4:'PD'};
   setText($('power-limit-status'),!fresh?'等待最新运行状态':
     powerOp?.state==='restore_pending'||power?.state==='restore_pending'?'恢复未完成，请查看后端详情':
     !s.config?.charge_power_limit_enabled?'已关闭':
@@ -378,16 +383,47 @@ async function save(event){
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}
   finally{busy=false;controls();await refresh();}
 }
-function exportLog(result){
-  if(!result.public_path){
-    const blob=new Blob([result.content],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=result.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+function showExportResult(result){
+  const saved=!!result.public_path,path=result.public_path||result.path;
+  if(typeof path!=='string'||!path.startsWith('/'))throw Error('未收到有效保存路径');
+  const dialog=$('export-dialog');dialog.dataset.tone=saved?'saved':'failed';
+  setText($('export-title'),saved?'日志已导出':'下载目录保存失败');
+  setText($('export-description'),saved?'已保存到下载目录，可复制路径查找文件。':'已保留内部副本，访问此位置需要 Root 权限。');
+  setText($('export-path'),path);setText($('export-copy-status'),'');
+  if(!dialog.open)dialog.showModal();
+}
+$('export-close').onclick=()=>$('export-dialog').close();
+$('export-copy').onclick=async()=>{
+  const button=$('export-copy'),path=$('export-path').textContent;button.disabled=true;
+  let copied=false;
+  try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(path);copied=true;}}catch(_){}
+  if(!copied){
+    // Legacy Android WebViews may not expose Clipboard API. Keep the fallback
+    // within the modal focus scope and copy only the actual returned path.
+    const field=element('textarea');field.value=path;field.readOnly=true;field.className='clipboard-buffer';$('export-dialog').append(field);
+    try{field.focus({preventScroll:true});field.select();copied=document.execCommand('copy');}catch(_){}
+    finally{field.remove();}
   }
-  const destination=result.public_path||result.path;$('export-result').hidden=false;
-  setText($('export-result'),result.public_path?'已保存到下载目录：'+result.public_path:'日志已生成并发起下载'+(destination?'。本机文件：'+destination:'：'+result.filename));message('日志文件已生成');
+  button.disabled=false;if($('export-dialog').open)button.focus({preventScroll:true});
+  setText($('export-copy-status'),copied?'路径已复制':'复制未成功，请长按上方路径手动复制。');
+};
+async function exportLog(){
+  if(exporting||busy||!CG.available())return;
+  exporting=true;controls();const resultNode=$('export-result'),label=$('export').querySelector('span');
+  resultNode.hidden=false;setText(resultNode,'正在导出到下载目录…');setText(label,'导出中…');$('export').setAttribute('aria-busy','true');
+  // Allow progress to paint before entering an older host's synchronous bridge.
+  await new Promise(resolve=>setTimeout(resolve,0));
+  try{
+    const result=await CG.call('export',undefined,20000);
+    if(result.public_path)setText(resultNode,'已保存：'+result.public_path);
+    else setText(resultNode,'下载目录保存失败；日志副本保留于：'+result.path+(result.public_error?'（'+result.public_error+'）':''));
+    showExportResult(result);
+  }catch(error){setText(resultNode,'导出未确认：'+error.message);}
+  finally{exporting=false;setText(label,'导出');$('export').removeAttribute('aria-busy');controls();}
 }
 async function action(verb){
   if(busy)return;requestEpoch++;busy=true;controls();
-  try{const result=await CG.call(verb,undefined,45000);if(verb==='export')exportLog(result);else message(verb==='stop'?'核心已停止，自有运行时操作已恢复':'核心已启动');}
+  try{const result=await CG.call(verb,undefined,45000);message(verb==='stop'?'核心已停止，自有运行时操作已恢复':'核心已启动');}
   catch(error){message(error.message,true);}finally{busy=false;controls();await refresh();}
 }
 
@@ -437,7 +473,8 @@ for(const button of document.querySelectorAll('[data-browser-command]'))button.o
   catch(error){message('系统浏览器打开失败：'+error.message,true);}
   finally{openingBrowser=false;for(const node of buttons)node.disabled=false;}
 };
-for(const verb of ['start','stop','export'])$(verb).onclick=()=>action(verb);
+$('export').onclick=exportLog;
+for(const verb of ['start','stop'])$(verb).onclick=()=>action(verb);
 for(const tab of ['logs','backends'])$('diagnostic-tab-'+tab).onclick=()=>diagnostics(tab);
 tabKeys(['logs','backends'].map(key=>$('diagnostic-tab-'+key)),index=>diagnostics(index?'backends':'logs'));
 $('toggle-diagnostics').onclick=()=>diagnostics(diagnosticTab,!diagnosticExpanded);

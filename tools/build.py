@@ -124,7 +124,14 @@ def verify_no_build_paths(data,prefixes):
     for prefix in prefixes:
         for encoding in ('utf-8','utf-16le'):
             if prefix.encode(encoding).lower() in lower:raise ValueError('Build-machine path remains in binary: '+prefix)
-    if re.search(rb'[A-Za-z]:\\|(?<![A-Za-z0-9_])[A-Za-z]:/[A-Za-z0-9_.-]+/',data):
+    # A three-byte drive prefix can occur in ARM instructions (e.g. R:\ + FF).
+    # Require a printable UTF-8 path component; exact prefix checks above still
+    # inspect every byte, including UTF-16 build paths.
+    windows_paths=[]
+    for match in re.finditer(rb'[A-Za-z]:\\[^\\/\x00-\x1f<>:"|?*]+',data):
+        try:windows_paths.append(match[0].decode('utf-8').isprintable())
+        except UnicodeDecodeError:pass
+    if any(windows_paths) or re.search(rb'(?<![A-Za-z0-9_])[A-Za-z]:/[A-Za-z0-9_.-]+/',data):
         raise ValueError('Windows absolute path remains in binary')
     if re.search(rb'/(?:home|Users)/[^/\x00]+/|/mnt/[a-z]/',data):
         raise ValueError('Host home or workspace path remains in binary')

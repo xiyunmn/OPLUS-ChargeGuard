@@ -10,6 +10,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 static SEQ: AtomicU64 = AtomicU64::new(1);
+// Four full backups retain about 50 minutes at the observed peak charging log
+// rate (~158 KiB/min); the current file brings the total bound to 10 MiB.
+pub const DETAIL_LOG_FILE_BYTES: usize = 2 * 1024 * 1024;
+pub const DETAIL_LOG_BACKUPS: usize = 4;
 pub fn secure_dir(p: &Path) -> Result<()> {
     if !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err("unsafe_directory".into());

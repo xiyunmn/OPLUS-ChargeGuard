@@ -224,7 +224,13 @@ fn detail_log(h: &Hardware, event: &str, detail: Value) -> Result<()> {
     let mut record = event_record(event, detail);
     record["worker_pid"] = json!(std::process::id());
     record["version"] = json!(crate::VERSION);
-    storage::append_rotating(&h.state(), "detail.jsonl", &record, 524288, 4)
+    storage::append_rotating(
+        &h.state(),
+        "detail.jsonl",
+        &record,
+        storage::DETAIL_LOG_FILE_BYTES,
+        storage::DETAIL_LOG_BACKUPS,
+    )
 }
 fn log(h: &Hardware, event: &str, detail: Value) {
     let _ = storage::log(&h.state(), &event_record(event, detail));
@@ -730,7 +736,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             "charge_listener":if events.power_available(){"uevent"}else{"unavailable"},"charge_listener_error":events.power_error,
             "listeners":events.health(),"backends":backend_views,
             "node_inventory":nodes.iter().map(|n|json!({"path":n.path,"type":n.kind,"group":n.group})).collect::<Vec<_>>(),
-            "logging":{"detailed_enabled":c.detailed_logging,"detail_error":detailed_error,"runtime_files":5,"runtime_file_bytes":262144,"detail_files":5,"detail_file_bytes":524288},
+            "logging":{"detailed_enabled":c.detailed_logging,"detail_error":detailed_error,"runtime_files":5,"runtime_file_bytes":262144,"detail_files":storage::DETAIL_LOG_BACKUPS+1,"detail_file_bytes":storage::DETAIL_LOG_FILE_BYTES},
             "write_mode":c.write_mode,"control_listeners":controls.as_ref().map(ControlEvents::health),"control_listener_error":controls_error,
             "counters":h.counters(),
             "device_capabilities":h.capabilities(),
@@ -890,8 +896,40 @@ pub fn stop(h: &Hardware) -> Result<Value> {
     }
     Ok(json!({"stopped":true,"restored":true,"backends":report,"config_error":config_result.err()}))
 }
+// Presentation only: the OEM UI protocol can include keep/override states.
+// Never use this field for power-limit control or infer PPS from USB_PD_PPS.
+fn charging_protocol(h: &Hardware) -> Value {
+    const OEM: &str = "/sys/class/oplus_chg/common/protocol_type";
+    let raw = h.read(OEM).ok();
+    let label = match raw.as_deref() {
+        Some("1") => Some("VOOC"),
+        Some("2") => Some("SVOOC"),
+        Some("3") => Some("PD"),
+        Some("4") => Some("QC"),
+        Some("5") => Some("PPS"),
+        Some("6") => Some("UFCS"),
+        _ => None,
+    };
+    if let Some(label) = label {
+        return json!({"label":label,"source":OEM,"raw":raw});
+    }
+    // Only the bracketed entry is active; the other entries list capabilities.
+    let usb = h.read("/sys/class/power_supply/usb/usb_type").ok();
+    let active = usb
+        .as_deref()
+        .and_then(|s| s.split_once('['))
+        .and_then(|(_, s)| s.split_once(']'))
+        .map(|(s, _)| s);
+    let label = match active {
+        Some("SDP" | "CDP") => "USB",
+        Some("DCP") => "DCP",
+        _ => "协议未知",
+    };
+    json!({"label":label,"source":"/sys/class/power_supply/usb/usb_type","raw":usb})
+}
 fn battery(h: &Hardware) -> Value {
     json!({"path":GAUGE,"raw":h.read(GAUGE).ok(),"temperature_c":h.read(GAUGE).ok().and_then(|s|s.parse::<f64>().ok()).map(|v|v/10.0),
+        "status":h.read("/sys/class/power_supply/battery/status").unwrap_or_else(|_|"Unknown".into()),"protocol":charging_protocol(h),
         "note":"本模块不覆盖此电池接口；第三方覆盖与厂商单位仍需设备核对", "capacity":h.read("/sys/class/power_supply/battery/capacity").ok(),
         "current_raw":h.read("/sys/class/power_supply/battery/current_now").ok(),"voltage_raw":h.read("/sys/class/power_supply/battery/voltage_now").ok()})
 }
@@ -1073,7 +1111,12 @@ pub fn export_log(h: &Hardware) -> Result<Value> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    let filename = format!("{}-{stamp}-{}.log", crate::ID, now_ms());
+    let filename = format!(
+        "{}-{stamp}-{}-{}.log",
+        crate::ID,
+        now_ms(),
+        std::process::id()
+    );
     let mut content = format!(
         "{} {}\nauthor={}\nmodule_id={}\nexport_unix_seconds={stamp}\n\n=== STATUS ===\n",
         crate::NAME,
@@ -1081,26 +1124,28 @@ pub fn export_log(h: &Hardware) -> Result<Value> {
         crate::AUTHOR,
         crate::ID
     );
-    content.push_str(&serde_json::to_string_pretty(&status(h)?).map_err(|e| e.to_string())?);
-    for stem in ["events.jsonl", "detail.jsonl"] {
-        for i in (1..=4).rev() {
+    // Export saved diagnostics without a potentially slow thermal node scan.
+    content.push_str(
+        &serde_json::to_string_pretty(&status_view(h, false)?).map_err(|e| e.to_string())?,
+    );
+    for (stem, max, keep) in [
+        ("events.jsonl", 262144, 4),
+        (
+            "detail.jsonl",
+            storage::DETAIL_LOG_FILE_BYTES,
+            storage::DETAIL_LOG_BACKUPS,
+        ),
+    ] {
+        for i in (1..=keep).rev() {
             let name = format!("{stem}.{i}");
             content.push_str(&format!("\n\n=== {name} ===\n"));
-            content.push_str(&log_tail(
-                h,
-                &name,
-                if stem == "detail.jsonl" {
-                    524288
-                } else {
-                    262144
-                },
-            ));
+            content.push_str(&log_tail(h, &name, max));
         }
     }
     for (name, max) in [
         ("events.previous.jsonl", 131072),
         ("events.jsonl", 262144),
-        ("detail.jsonl", 524288),
+        ("detail.jsonl", storage::DETAIL_LOG_FILE_BYTES),
         ("worker.log", 16384),
         ("camera-events.log", 16384),
         ("daemon.log", 16384),
@@ -1117,6 +1162,7 @@ fn publish_log(h: &Hardware, filename: &str, content: String, saved_name: &str) 
     use std::os::unix::fs::OpenOptionsExt;
     let path = h.state().join(saved_name);
     storage::atomic(&path, content.as_bytes())?;
+    let mut public_error = None;
     let public_path = if h.exists("/sdcard/Download") {
         let p = h.path(&format!("/sdcard/Download/{filename}"));
         let mut created = false;
@@ -1131,19 +1177,23 @@ fn publish_log(h: &Hardware, filename: &str, content: String, saved_name: &str) 
             f.write_all(content.as_bytes())?;
             f.sync_all()
         })();
-        if r.is_ok() {
-            Some(p)
-        } else {
-            if created {
-                let _ = fs::remove_file(&p);
+        match r {
+            Ok(()) => Some(p),
+            Err(error) => {
+                public_error = Some(error.to_string());
+                if created {
+                    let _ = fs::remove_file(&p);
+                }
+                None
             }
-            None
         }
     } else {
+        public_error = Some("下载目录不可用".to_owned());
         None
     };
+    // Large logs must not cross Android's JavascriptInterface/loadUrl bridge.
     Ok(
-        json!({"path":path,"public_path":public_path,"filename":filename,"content":content,"bytes":content.len()}),
+        json!({"path":path,"public_path":public_path,"public_error":public_error,"filename":filename,"bytes":content.len()}),
     )
 }
 pub fn hardware_from_environment() -> Result<Hardware> {
