@@ -452,6 +452,7 @@ impl ControlEvents {
             Method::Bind { .. } => "挂载或掩码监听尚未就绪",
             Method::Service => "服务属性不存在或事件监听尚未就绪",
             Method::Shell | Method::Emulation => "保留已生效的周期写入机制",
+            Method::Pps => "核验辅助开关；原厂充电流程内执行电流辅助判断",
             _ if op.family == "cooling" => "Cooling 通知源未全部就绪，临时保留原周期核验",
             _ if op.target.starts_with("/proc/game_opt/") => {
                 "缺少可靠的私有 QoS 状态验证接口，保留定时续写"

@@ -21,6 +21,9 @@ pub struct Capabilities {
     pub shell_image_sha256: Option<String>,
     pub shell_loaded_note_sha256: Option<String>,
     pub shell_slots: Option<usize>,
+    pub pps_driver_sha256: Option<String>,
+    pub pps_kernel_release: Option<String>,
+    pub pps_verified: bool,
 }
 fn hash(h: &Hardware, path: &str, limit: u64) -> Option<String> {
     let mut bytes = Vec::new();
@@ -51,10 +54,20 @@ impl Capabilities {
             "/sys/module/horae_shell_temp/notes/.note.gnu.build-id",
             4096,
         );
+        let pps_image = hash(
+            h,
+            "/vendor_dlkm/lib/modules/oplus_chg_v2.ko",
+            16 * 1024 * 1024,
+        );
+        let kernel = h.read("/proc/sys/kernel/osrelease").ok();
         Self {
             shell_slots: shell_slots(image.as_deref(), note.as_deref()),
             shell_image_sha256: image,
             shell_loaded_note_sha256: note,
+            pps_verified: pps_image.as_deref() == Some(crate::pps::DRIVER_IMAGE)
+                && kernel.as_deref() == Some(crate::pps::KERNEL_RELEASE),
+            pps_driver_sha256: pps_image,
+            pps_kernel_release: kernel,
         }
     }
 }

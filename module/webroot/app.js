@@ -54,7 +54,7 @@ function labels(){
 function populate(next){
   config=next;
   for(const key of tempKeys)$(key).value=next[key]/1000;
-  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','detailed_logging'])$(key).checked=!!next[key];
+  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','detailed_logging'])$(key).checked=!!next[key];
   for(const radio of document.querySelectorAll('[name=charge_horae_mode]'))radio.checked=radio.value===next.charge_horae_mode;
   for(const radio of document.querySelectorAll('[name=write_mode]'))radio.checked=radio.value===(next.write_mode||'event');
   dirty=false;labels();controls();
@@ -132,6 +132,16 @@ function render(data){
   const reason=fresh?(idle?(s.config?.charge_trigger?'等待充电，当前未应用运行时控制':'预设已关闭，核心保持观察'):''):(active?'守护进程继续维护，请稍后刷新':'点击启动核心恢复观察');
   setText($('reason'),reason);$('reason').hidden=!reason;
   const ops=Array.isArray(s.backends)?s.backends:[];
+  const pps=ops.find(op=>op.id==='pps_status_assist'),assist=s.pps_assist;
+  setText($('pps-assist-status'),!fresh?'等待最新运行状态':
+    pps?.state==='restore_pending'?'辅助功能恢复中，请查看后端详情':
+    pps?.state==='retrying'?'辅助功能未生效，请查看后端详情':
+    !s.config?.charge_pps_stability?'已关闭':
+    !s.device_capabilities?.pps_verified?'当前内核或充电固件未适配，未启用':
+    s.profile!=='charging'||s.charge_status!=='Charging'?'等待充电独立预设生效':
+    assist?.retiring?'驱动已退出，辅助功能已停止':
+    assist?.enabled&&assist?.applied?'辅助选项已应用；协议仍由原厂管理':
+    assist?.enabled?'已准备，等待 PPS 充电流程':'尚未启用');
   setText($('backend-tab-count'),count(ops.length));setText(document.querySelector('[data-backend-filter=all] .filter-count'),count(ops.length));
   setText($('log-detail-state'),s.logging?.detailed_enabled?'详细日志已开启':'详细日志关闭');
   $('logging-error').hidden=!s.logging?.detail_error;setText($('logging-error'),s.logging?.detail_error?'详细日志记录失败：'+s.logging.detail_error:'');
@@ -171,7 +181,7 @@ function backendGroup(op){
   if(String(op.target).endsWith('/emul_temp'))return ['emul_temp','emul_temp','shell'];
   if(String(op.target).startsWith('/proc/game_opt/'))return ['game_opt','game_opt','frequency'];
   if(['omrg','migt'].includes(op.id))return [op.id,op.id.toUpperCase(),'frequency'];
-  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务'};
+  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务',pps:'PPS 稳定性辅助'};
   if(names[op.family])return [op.family,names[op.family],op.family];
   return [op.id||op.target,op.id||op.target||'其他后端',op.family||'other'];
 }
@@ -325,7 +335,7 @@ async function save(event){
   requestEpoch++;busy=true;controls();
   try{
     const next={...config};for(const key of tempKeys)next[key]=Math.round(Number($(key).value)*1000);
-    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','detailed_logging'])next[key]=$(key).checked;
+    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','detailed_logging'])next[key]=$(key).checked;
     next.charge_horae_mode=document.querySelector('[name=charge_horae_mode]:checked').value;next.write_mode=document.querySelector('[name=write_mode]:checked').value;
     const result=await CG.call('configure-hex',CG.hex({expected_revision:config.revision,config:next}));populate(result.config);message('设置已保存',false,'config');
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}

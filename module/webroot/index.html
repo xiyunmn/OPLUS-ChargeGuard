@@ -100,6 +100,7 @@
 </section>
 <section id="page-charge" role="tabpanel" aria-labelledby="tab-charge" hidden>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_trigger">充电独立预设</label><p class="hint">充电或已充满时启用；拔线后按全局开关运行。</p></div><input id="charge_trigger" class="switch" type="checkbox" checked></div></div>
+  <div class="card switch-card"><div class="setting-row"><div><label for="charge_pps_stability">PPS 稳定性辅助</label><p class="hint">参考充电器输出电流，减少低电流误退；保留原厂满电收尾。</p><p class="hint" id="pps-assist-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_pps_stability" class="switch" type="checkbox" aria-describedby="pps-assist-status"></div></div>
   <div class="card horae-card"><div class="setting-row"><label for="charge_horae_enabled">充电 Horae 调整</label><input id="charge_horae_enabled" class="switch" type="checkbox" checked></div>
     <div class="segmented solid" role="group" aria-label="充电 Horae 模式"><label><input name="charge_horae_mode" type="radio" value="charging"><span>充电时禁用</span></label><label><input name="charge_horae_mode" type="radio" value="smart" checked><span>智能调整</span></label></div>
     <p class="hint horae-hint" id="horae-mode-hint">相机占用或未知时恢复，空闲稳定 3 秒后禁用。</p>

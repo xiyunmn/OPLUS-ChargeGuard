@@ -50,6 +50,7 @@
 !/src/events.rs
 !/src/hardware.rs
 !/src/lib.rs
+!/src/pps.rs
 !/src/main.rs
 !/src/maintenance.rs
 !/src/maintenance_events.rs
@@ -59,6 +60,12 @@
 !/tools/build.py
 !/tools/ci.py
 !/tools/cooling_events.c
+!/tools/build_pps.py
+!/kernel/
+!/kernel/charge_guard_pps.c
+!/kernel/pjz110-headers.tar.xz
+!/kernel/pjz110-symbols.json
+!/kernel/pjz110-target.json
 
 [lL][oO][cC][aA][lL]_[dD][oO][cC][sS]/
 /target/

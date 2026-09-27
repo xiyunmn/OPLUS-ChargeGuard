@@ -34,6 +34,8 @@ pub struct Config {
     #[serde(default = "yes")]
     pub charge_horae_enabled: bool,
     #[serde(default)]
+    pub charge_pps_stability: bool,
+    #[serde(default)]
     pub charge_horae_mode: HoraeMode,
     pub batt_temp_mc: i32,
     pub cpu_temp_mc: i32,
@@ -63,6 +65,7 @@ impl Default for Config {
             horae_stop: true,
             charge_trigger: true,
             charge_horae_enabled: true,
+            charge_pps_stability: false,
             charge_horae_mode: HoraeMode::Smart,
             batt_temp_mc: 34000,
             cpu_temp_mc: 40000,
@@ -125,6 +128,9 @@ impl Config {
     }
     pub fn effective(&self, status: &str, smart_permits_horae: bool) -> Self {
         let mut c = self.clone();
+        c.charge_pps_stability = self.charge_pps_stability
+            && self.select(status).0 == "charging"
+            && status.trim() == "Charging";
         match self.select(status).0 {
             "charging" => {
                 c.horae_stop = self.charge_horae_enabled

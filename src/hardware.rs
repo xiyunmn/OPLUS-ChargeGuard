@@ -161,6 +161,25 @@ impl Hardware {
             .map_err(|e| format!("open:{e}"))?;
         f.write_all(v.as_bytes())
             .map_err(|e| format!("write:{e}"))?;
+        #[cfg(any(test, all(feature = "fixtures", not(target_os = "android"))))]
+        if self.fixture && p == crate::pps::ENABLED && matches!(v, "0" | "1") {
+            // Model the helper's synchronous disable/restore contract, not OEM charging.
+            let raw = self.read(crate::pps::STATUS)?;
+            let mut fields = raw
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            for field in &mut fields {
+                if field.starts_with("enabled=") {
+                    *field = format!("enabled={v}");
+                }
+                if v == "0" && field.starts_with("applied=") {
+                    *field = "applied=0".into();
+                }
+            }
+            fs::write(self.path(crate::pps::STATUS), fields.join(" "))
+                .map_err(|e| e.to_string())?;
+        }
         self.counters.node_writes.fetch_add(1, Ordering::Relaxed);
         self.record(serde_json::json!({"kind":"write","path":p,"value":v}));
         Ok(())

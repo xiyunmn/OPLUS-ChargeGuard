@@ -26,6 +26,7 @@ pub enum Method {
     Emulation,
     Bind { source: String },
     Service,
+    Pps,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Operation {
@@ -74,8 +75,10 @@ pub struct Verification {
 }
 /// State-bearing interfaces, excluding masked game_opt displays and shell/emulation.
 pub fn can_verify(op: &Operation) -> bool {
-    op.method == Method::Write
-        && (op.target == BOUNCE || (op.family == "cooling" && op.target.ends_with("/cur_state")))
+    op.method == Method::Pps
+        || op.method == Method::Write
+            && (op.target == BOUNCE
+                || (op.family == "cooling" && op.target.ends_with("/cur_state")))
 }
 pub struct Controller {
     pub journal: Journal,
@@ -115,6 +118,17 @@ pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Op
         return vec![];
     }
     let mut ops = vec![];
+    if c.charge_pps_stability {
+        ops.push(write(
+            crate::pps::ID,
+            "pps",
+            crate::pps::ENABLED,
+            "1".into(),
+            Some("0".into()),
+            Method::Pps,
+            None,
+        ));
+    }
     for name in ["thermal-engine", ORMS] {
         ops.push(write(
             name,
@@ -418,6 +432,9 @@ impl Controller {
             }
             let result = (|| -> Result<&'static str> {
                 validate_operation(op)?;
+                if op.method == Method::Pps && !h.capabilities().pps_verified {
+                    return Ok("unsupported");
+                }
                 if op.method == Method::Shell {
                     let Some(slots) = h.capabilities().shell_slots else {
                         return Ok("unverified");
@@ -430,7 +447,7 @@ impl Controller {
                     if h.service_state(&op.target)?.is_none() {
                         return Ok("unsupported");
                     }
-                } else if !h.present(&op.target)? {
+                } else if op.method != Method::Pps && !h.present(&op.target)? {
                     return Ok("unavailable");
                 }
                 if op.sensor_type.is_some() && sensor_type(h, op) != op.sensor_type {
@@ -452,6 +469,7 @@ impl Controller {
                         Method::Service => h.service_state(&op.target)?,
                         Method::Emulation | Method::Shell | Method::Bind { .. } => None,
                         Method::Write => h.read(&op.target).ok(),
+                        Method::Pps => Some(crate::pps::original(h)?),
                     };
                     if op.method == Method::Service
                         && !matches!(original.as_deref(), Some("running" | "stopped"))
@@ -494,6 +512,9 @@ impl Controller {
                 }
                 // Re-establish a removed/replaced journal before any new device write.
                 self.save(h)?;
+                if op.method == Method::Pps {
+                    crate::pps::prepare(h)?;
+                }
                 if let Method::Bind { source } = &op.method {
                     let needs_bind = !h.mounted(&op.target, source);
                     if needs_bind || h.read(source).ok().as_deref() != Some(op.desired.as_str()) {
@@ -557,7 +578,9 @@ impl Controller {
                     if self.verify_nodes && can_verify(op) {
                         verification.repair_writes += 1;
                     }
-                    if op.method == Method::Write && !op.target.starts_with("/proc/game_opt/cpu_") {
+                    if matches!(op.method, Method::Write | Method::Pps)
+                        && !op.target.starts_with("/proc/game_opt/cpu_")
+                    {
                         let readback = h.read(&op.target)?;
                         verification.observed_after = Some(readback.clone());
                         if readback.trim() != op.desired.trim() {
@@ -586,6 +609,15 @@ impl Controller {
                         Some("node_repair_rate_limited".into())
                     } else if s == "unverified" {
                         Some("shell_driver_unverified".into())
+                    } else if op.method == Method::Pps {
+                        Some(
+                            if s == "unsupported" {
+                                "pps_firmware_not_supported"
+                            } else {
+                                "pps_status_assist_enabled_not_a_protocol_guarantee"
+                            }
+                            .into(),
+                        )
                     } else if s == "applied" && op.method == Method::Shell {
                         Some("write_accepted_aggregate_readback".into())
                     } else if s == "applied" && op.target.starts_with("/proc/game_opt/cpu_") {
@@ -652,7 +684,7 @@ impl Controller {
         entries.sort_by_key(|e| match e.op.method {
             Method::Bind { .. } => 0,
             Method::Shell | Method::Emulation => 1,
-            Method::Write => 2,
+            Method::Write | Method::Pps => 2,
             Method::Service => 3,
         });
         let mut statuses = vec![];
@@ -661,6 +693,7 @@ impl Controller {
             let r = (|| -> Result<()> {
                 validate_operation(op)?;
                 match &op.method {
+                    Method::Pps => crate::pps::restore(h, e.original.as_deref())?,
                     Method::Bind { source } => {
                         h.unbind(&op.target, source)?;
                         let _ = fs::remove_file(h.path(source));
@@ -797,6 +830,14 @@ fn validate_operation(op: &Operation) -> Result<()> {
             })
         });
     let ok = match &op.method {
+        Method::Pps => {
+            op.id == crate::pps::ID
+                && op.family == "pps"
+                && t == crate::pps::ENABLED
+                && op.desired == "1"
+                && op.reset.as_deref() == Some("0")
+                && op.sensor_type.is_none()
+        }
         Method::Service => matches!(t.as_str(), "horae" | "thermal-engine" | ORMS),
         Method::Bind { source } => thermal && t.ends_with("/temp") && *source == mask_source(t),
         Method::Emulation => thermal && t.ends_with("/emul_temp"),

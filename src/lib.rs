@@ -12,6 +12,7 @@ pub mod events;
 pub mod hardware;
 pub mod maintenance;
 pub mod maintenance_events;
+pub mod pps;
 pub mod runtime;
 pub mod storage;
 pub type Result<T> = std::result::Result<T, String>;

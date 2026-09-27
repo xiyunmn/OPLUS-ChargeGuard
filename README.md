@@ -7,6 +7,7 @@
 
 - 全局温控与充电独立预设，分别调整电池、CPU、GPU、DDR 温度目标。默认关闭全局温控、开启充电预设。
 - 充电与相机状态事件监听，支持充电期间禁用 Horae 或根据相机状态智能调整。
+- 充电预设可独立开启 PPS 稳定性辅助，默认关闭；通过匹配固件的独立内核模块启用原厂 PPS Status 电流辅助判断，保留原厂保护和满电收尾。目前仅适配已核验的 PJZ110 固件，实际充电效果仍需验证。
 - 支持事件驱动和循环维护两种写入模式，默认事件驱动。Cooling、Bouncing 等使用事件维护；shell-temp、emul_temp、game_opt 保留必要周期维护。
 - WebUI 提供仪表盘、温度接口、后端详情和轮转日志，支持浅色／深色主题及 95%～115% 界面 DPI 调节。
 - 支持手动停止、恢复与卸载；不携带 `system.prop`，不修改持久化温控属性。
@@ -34,4 +35,4 @@ python tools/build.py build --channel release
 
 ## 协议
 
-本项目采用 [MIT License](LICENSE)。
+用户态核心与 WebUI 采用 [MIT License](LICENSE)。独立内核辅助模块采用 GPL-2.0-only；内核头文件保留各自的 SPDX 许可声明。

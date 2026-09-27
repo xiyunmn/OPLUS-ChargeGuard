@@ -598,8 +598,10 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 let blocked = s.state == "unverified";
                 let repair_wait = s.state == "repair_wait";
                 let event = schedule.is_event(&s.id) && !retrying;
-                let dormant = matches!(s.id.as_str(), "omrg" | "migt" | control::ORMS)
-                    && matches!(s.state.as_str(), "unavailable" | "unsupported");
+                let dormant = matches!(
+                    s.id.as_str(),
+                    "omrg" | "migt" | control::ORMS | crate::pps::ID
+                ) && matches!(s.state.as_str(), "unavailable" | "unsupported");
                 let hybrid = op.is_some_and(|o| controls.as_ref().is_some_and(|l| l.hybrid(o)));
                 let verify =
                     c.write_mode == WriteMode::Event && op.is_some_and(control::can_verify);
@@ -723,6 +725,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             "write_mode":c.write_mode,"control_listeners":controls.as_ref().map(ControlEvents::health),"control_listener_error":controls_error,
             "counters":h.counters(),
             "device_capabilities":h.capabilities(),
+            "pps_assist":crate::pps::status(h).ok(),
             "heartbeat_interval_secs":120,
             "owned_count":controller.journal.entries.len(),"mount_count":controller.journal.entries.values().filter(|e|matches!(e.op.method,control::Method::Bind{..})&&e.applied).count()});
         snapshot["counters"]["worker_cpu_ms"] = json!(worker_cpu_ms());

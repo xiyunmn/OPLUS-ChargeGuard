@@ -1,0 +1,7 @@
+{
+  "kernel_release": "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k",
+  "headers_sha256": "70e782864b6518a0c5895249691d2a70cfe0ac45542d0193f2c92680ec003490",
+  "driver_sha256": "205fb7ebdd5d12438fbd40e7432d12c034929c629a8657ca17f38d50de7c63ce",
+  "source": "IKHEADERS extracted from connected PJZ110 /system_dlkm/lib/modules/kheaders.ko; CRCs extracted from same-device stock modules; no firmware images distributed",
+  "api": "pjz110-f04-205fb7eb-v1"
+}
