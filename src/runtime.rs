@@ -48,7 +48,7 @@ fn worker_cpu_ms() -> Option<u64> {
         .then_some(t.tv_sec as u64 * 1000 + t.tv_nsec as u64 / 1_000_000)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Identity {
+pub(crate) struct Identity {
     pid: u32,
     start_ticks: u64,
     boot_id: String,
@@ -67,7 +67,7 @@ fn ticks(pid: u32) -> Result<u64> {
         .parse()
         .map_err(|_| "invalid_start_ticks".into())
 }
-fn alive(i: &Identity) -> bool {
+pub(crate) fn alive(i: &Identity) -> bool {
     process_identity(i.pid).is_ok_and(|n| {
         n.start_ticks == i.start_ticks
             && n.boot_id == i.boot_id
@@ -75,7 +75,7 @@ fn alive(i: &Identity) -> bool {
             && n.exe_ino == i.exe_ino
     })
 }
-fn process_identity(pid: u32) -> Result<Identity> {
+pub(crate) fn process_identity(pid: u32) -> Result<Identity> {
     let start_ticks = ticks(pid)?;
     let m = fs::metadata(format!("/proc/{pid}/exe")).map_err(|e| e.to_string())?;
     let boot_id =
@@ -368,6 +368,17 @@ pub fn worker(h: &Hardware) -> Result<Value> {
     let mut charge = h
         .read("/sys/class/power_supply/battery/status")
         .unwrap_or_else(|_| "Unknown".into());
+    let mut statistics_charge = crate::statistics_measurement::charge_state(h, &charge);
+    let (mut statistics, mut statistics_error) =
+        match crate::statistics::Recorder::new(h, &c, statistics_charge.clone()) {
+            Ok(recorder) => (Some(recorder), None),
+            Err(error) => {
+                log(h, "statistics_error", json!({"error":error}));
+                (None, Some(error))
+            }
+        };
+    let mut statistics_revision = c.revision;
+    let mut statistics_power_event = false;
     let mut nodes = discovery::thermal(h);
     let mut discovered = Instant::now();
     log(
@@ -701,6 +712,32 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 v
             })
             .collect::<Vec<_>>();
+        // Sampling follows control maintenance and has its own deadline. A
+        // telemetry error never aborts restoration or charging control.
+        if statistics.is_none() && c.revision != statistics_revision {
+            match crate::statistics::Recorder::new(h, &c, statistics_charge.clone()) {
+                Ok(recorder) => {
+                    statistics = Some(recorder);
+                    statistics_error = None;
+                }
+                Err(error) => {
+                    statistics_error = Some(error);
+                }
+            }
+        }
+        statistics_revision = c.revision;
+        if let Some(recorder) = &mut statistics {
+            let result = recorder
+                .update(h, &c, statistics_charge.clone(), statistics_power_event)
+                .and_then(|_| recorder.sample_due(h));
+            if let Err(error) = result {
+                let _ = recorder.finish(h, "recording_error");
+                log(h, "statistics_error", json!({"error":error}));
+                statistics_error = Some(error);
+                statistics = None;
+            }
+        }
+        statistics_power_event = false;
         let modes = json!({"configured":c.write_mode,"event_backends":backend_views.iter().filter(|b|b["maintenance_mode"]=="event").count(),
             "periodic_backends":backend_views.iter().filter(|b|b["maintenance_mode"]=="loop"||b["maintenance_mode"]=="event_check").count(),
             "hybrid_backends":backend_views.iter().filter(|b|b["maintenance_mode"]=="event_check").count(),
@@ -723,6 +760,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             "pps_assist":crate::pps::status(h).ok(),
             "power_limit":crate::power::status(h).ok(),
             "screen_fast":crate::screen::status(h).ok(),
+            "statistics_error":statistics_error,
             "heartbeat_interval_secs":120,
             "owned_count":controller.journal.entries.len(),"mount_count":controller.journal.entries.values().filter(|e|matches!(e.op.method,control::Method::Bind{..}|control::Method::Engineer)&&e.applied).count()});
         snapshot["counters"]["worker_cpu_ms"] = json!(worker_cpu_ms());
@@ -790,6 +828,12 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 .saturating_sub(last_published.elapsed())
                 .as_millis() as u64,
         );
+        if let Some(delay) = statistics
+            .as_ref()
+            .and_then(crate::statistics::Recorder::next_due)
+        {
+            wait_ms = wait_ms.min(delay.as_millis() as u64);
+        }
         let until = Instant::now() + Duration::from_millis(wait_ms);
         while Instant::now() < until && !inactive(h) {
             if RELOAD.swap(false, Ordering::Relaxed) {
@@ -817,6 +861,20 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 } else {
                     "Unknown".into()
                 };
+                let next_statistics = if events.power_available() || h.fixture {
+                    crate::statistics_measurement::charge_state(h, &next)
+                } else {
+                    crate::statistics::ChargeState {
+                        status: "Unknown".into(),
+                        ..Default::default()
+                    }
+                };
+                let statistics_changed = statistics_charge.connected != next_statistics.connected
+                    || statistics_charge.status != next_statistics.status
+                    || statistics_charge.protocol != next_statistics.protocol
+                    || statistics_charge.source != next_statistics.source;
+                statistics_charge = next_statistics;
+                statistics_power_event |= statistics_changed;
                 if next != charge {
                     log(
                         h,
@@ -824,6 +882,9 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                         json!({"from":charge,"to":next,"source":"uevent"}),
                     );
                     charge = next;
+                    break;
+                }
+                if statistics_changed {
                     break;
                 }
             }
@@ -834,6 +895,11 @@ pub fn worker(h: &Hardware) -> Result<Value> {
     }
     drop(controls);
     drop(monitor);
+    if let Some(recorder) = &mut statistics {
+        if let Err(error) = recorder.finish(h, "module_stopped") {
+            log(h, "statistics_error", json!({"error":error}));
+        }
+    }
     let restored = controller.restore(h)?;
     storage::json(
         &h.state().join("status.json"),
@@ -881,7 +947,7 @@ pub fn stop(h: &Hardware) -> Result<Value> {
 }
 // Presentation only: the OEM UI protocol can include keep/override states.
 // Never use this field for power-limit control or infer PPS from USB_PD_PPS.
-fn charging_protocol(h: &Hardware) -> Value {
+pub(crate) fn charging_protocol(h: &Hardware) -> Value {
     const OEM: &str = "/sys/class/oplus_chg/common/protocol_type";
     let raw = h.read(OEM).ok();
     let label = match raw.as_deref() {
@@ -1216,6 +1282,83 @@ pub fn probe_install(h: &Hardware) -> Result<Value> {
         "charging_control_started":false}),
     )
 }
+pub(crate) fn statistics_readings(h: &Hardware) -> crate::statistics::Readings {
+    crate::statistics_measurement::readings(h)
+}
+pub(crate) fn statistics_measurement(h: &Hardware) -> Value {
+    crate::statistics_measurement::description(h)
+}
+pub(crate) fn statistics_context(h: &Hardware) -> Value {
+    crate::statistics_measurement::context(h)
+}
+fn statistics_command(h: &Hardware, payload: &str) -> Result<Value> {
+    let request: Value =
+        serde_json::from_slice(&config::decode_hex(payload)?).map_err(|e| e.to_string())?;
+    let action = request["action"]
+        .as_str()
+        .ok_or("missing_statistics_action")?;
+    if action == "export-start" {
+        return crate::statistics_export::start(h, &request);
+    }
+    if action == "export-status" {
+        return crate::statistics_export::status(
+            h,
+            request["job_id"].as_str().ok_or("missing_export_job")?,
+        );
+    }
+    let store = crate::statistics::Store::new(h)?;
+    let filter = || -> Result<crate::statistics::Filter> {
+        serde_json::from_value(request.get("filter").cloned().unwrap_or_else(|| json!({})))
+            .map_err(|e| e.to_string())
+    };
+    match action {
+        "list" => {
+            let mut result = serde_json::to_value(store.list(
+                &filter()?,
+                request["offset"].as_u64().unwrap_or(0) as usize,
+                &config(h)?,
+                h,
+            )?)
+            .map_err(|e| e.to_string())?;
+            let worker_alive = identity(h, "worker").is_some_and(|i| alive(&i));
+            result["worker_alive"] = json!(worker_alive);
+            if let Ok(snapshot) = storage::load::<Value>(&h.state().join("status.json"), 2_097_152)
+            {
+                result["error"] = snapshot["statistics_error"].clone();
+            }
+            Ok(result)
+        }
+        "detail" => {
+            let query = crate::statistics::DetailQuery {
+                cursor: request["cursor"].as_u64(),
+                from_elapsed_ms: request["from_elapsed_ms"].as_u64(),
+                to_elapsed_ms: request["to_elapsed_ms"].as_u64(),
+                max_points: request["max_points"].as_u64().unwrap_or(1200) as usize,
+            };
+            serde_json::to_value(store.detail(
+                request["id"].as_str().ok_or("missing_statistics_id")?,
+                &query,
+            )?)
+            .map_err(|e| e.to_string())
+        }
+        "storage" => {
+            let mut value = store.storage()?;
+            value["measurement"] = statistics_measurement(h);
+            Ok(value)
+        }
+        "delete" => {
+            let count = if request["all"].as_bool() == Some(true) {
+                store.clear()?
+            } else {
+                let ids: Vec<String> = serde_json::from_value(request["ids"].clone())
+                    .map_err(|_| "invalid_statistics_ids")?;
+                store.delete(&ids)?
+            };
+            Ok(json!({"deleted":count}))
+        }
+        _ => Err("unknown_statistics_action".into()),
+    }
+}
 pub fn execute(args: &[String]) -> Result<Value> {
     let verb = args.first().map(String::as_str).unwrap_or("status");
     if verb == "version" {
@@ -1253,6 +1396,12 @@ pub fn execute(args: &[String]) -> Result<Value> {
             Ok(json!({"nodes":node_views(&h,&Controller::load(&h)?),"sampled_ms":now_ms()}))
         }
         "export" => export_log(&h),
+        "statistics-hex" => {
+            statistics_command(&h, args.get(1).ok_or("missing_statistics_request")?)
+        }
+        "statistics-export-worker" => {
+            crate::statistics_export::run(&h, args.get(1).ok_or("missing_export_job")?)
+        }
         _ => Err("unknown_command".into()),
     }
 }

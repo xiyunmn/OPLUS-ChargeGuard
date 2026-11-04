@@ -9,7 +9,8 @@
 <title>OPLUS 充电温控</title>
 <script src="theme.js"></script>
 <link rel="stylesheet" href="style.css">
-<script src="bridge.js" defer></script><script src="app.js" defer></script>
+<link rel="stylesheet" href="statistics.css">
+<script src="bridge.js" defer></script><script src="statistics.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -17,6 +18,11 @@
   <symbol id="i-thermo" viewBox="0 0 24 24"><path d="M9 14V5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0Z M12 7v10"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 11h6l-1 9 9-12h-6Z"/></symbol>
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M3 6h4m4 0h10M3 12h11m4 0h3M3 18h2m4 0h12"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></symbol>
+  <symbol id="i-statistics" viewBox="0 0 24 24"><rect x="4" y="13" width="3" height="8" rx="1"/><rect x="10.5" y="8" width="3" height="13" rx="1"/><rect x="17" y="3" width="3" height="18" rx="1"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m11 4-8 8 8 8M3 12h18"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 4h18l-7 8v8l-4-2v-6Z"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
   <symbol id="i-next" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 1 0 .5 9M20 2v5h-5"/></symbol>
@@ -29,7 +35,7 @@
   <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7M21 3l-11 11M10 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6"/></symbol>
 </defs></svg>
-<header><div class="header-inner"><div class="header-copy"><h1 id="page-title">OPLUS 充电温控</h1><p class="subtitle" id="oem-version">读取系统版本…</p></div><span id="core-badge" class="status-badge" data-tone="muted"><i class="status-dot"></i><span id="core-state">连接中</span></span></div></header>
+<header><div class="header-inner"><button type="button" id="statistics-back" class="icon-button" aria-label="返回充电统计" hidden><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button><div class="header-copy"><h1 id="page-title">OPLUS 充电温控</h1><p class="subtitle" id="oem-version">读取系统版本…</p></div><span id="core-badge" class="status-badge" data-tone="muted"><i class="status-dot"></i><span id="core-state">连接中</span></span><button type="button" id="statistics-settings" class="icon-button" aria-label="记录设置" hidden><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg></button></div></header>
 <main id="content"><div id="message" class="notice" role="status" hidden></div><form id="settings">
 <section id="page-overview" role="tabpanel" aria-labelledby="tab-overview">
   <div class="card battery-card">
@@ -165,6 +171,51 @@
 </div>
 </div>
 </section>
+<section id="page-statistics" role="tabpanel" aria-labelledby="tab-statistics" hidden>
+  <div id="statistics-tabs" class="stats-segments" role="tablist" aria-label="充电统计"><button type="button" id="statistics-tab-current" role="tab" aria-selected="true" aria-controls="statistics-current">本次</button><button type="button" id="statistics-tab-history" role="tab" aria-selected="false" aria-controls="statistics-history" tabindex="-1">历史</button></div>
+  <p id="statistics-notice" class="notice" role="status" hidden></p>
+  <div id="statistics-current" role="tabpanel" aria-labelledby="statistics-tab-current">
+    <div id="statistics-session" hidden>
+      <div class="card stats-session-card">
+        <h2 id="statistics-session-label" class="stats-session-label" hidden>最近一次充电</h2>
+        <div class="stats-session-heading"><span id="statistics-protocol" class="charge-badge protocol-badge">—</span><span id="statistics-session-state" class="charge-badge">等待充电</span></div>
+        <p id="statistics-session-time" class="hint" hidden></p>
+        <div class="stats-live-readings"><div><strong id="statistics-power">—</strong><small> W</small><span>电池净功率</span></div><div><strong id="statistics-temperature">—</strong><small> ℃</small><span>电池温度</span></div></div>
+        <div class="stats-soc-line"><strong id="statistics-soc">— → —</strong><span id="statistics-duration">—</span></div><div class="stats-soc-track"><span id="statistics-soc-fill"></span></div>
+        <p id="statistics-session-note" class="hint" hidden></p>
+      </div>
+      <div class="card stats-chart-card">
+        <div class="card-heading"><h2>充电曲线</h2><div id="statistics-chart-period" class="stats-segments stats-compact" role="group" aria-label="曲线时间范围"><button type="button" data-stat-period="full" aria-pressed="true">全部</button><button type="button" data-stat-period="recent" aria-pressed="false">近15分</button></div></div>
+        <div class="stats-segments stats-metrics" role="group" aria-label="上图指标"><button type="button" data-stat-metric="net_power_w" aria-pressed="true">功率</button><button type="button" data-stat-metric="current_ma" aria-pressed="false">电流</button><button type="button" data-stat-metric="voltage_mv" aria-pressed="false">电压</button><button type="button" data-stat-metric="soc" aria-pressed="false">电量</button></div>
+        <div id="statistics-chart-touch" class="stats-chart-touch" tabindex="0" role="group" aria-label="充电双图，滑动查看同一时刻读数，方向键逐点查看">
+          <div class="stats-chart-label" id="statistics-upper-label">电池净功率 · W</div><svg id="statistics-upper-chart" class="stats-chart" viewBox="0 0 560 170" role="img" aria-label="电池净功率曲线"></svg>
+          <div class="stats-chart-label">电池温度 · ℃</div><svg id="statistics-temperature-chart" class="stats-chart stats-temperature-chart" viewBox="0 0 560 170" role="img" aria-label="电池温度曲线"></svg>
+          <output id="statistics-cursor" class="stats-cursor" hidden></output>
+        </div>
+        <div id="statistics-protocol-track" class="stats-protocol-track" aria-label="充电协议变化"></div>
+        <div id="statistics-window" class="stats-window" hidden><div class="stats-window-track"><span id="statistics-window-selection"></span></div><input data-stat-input id="statistics-window-start" type="range" min="0" max="1" step="1000" value="0" aria-label="详情起始时间"><input data-stat-input id="statistics-window-end" type="range" min="0" max="1" step="1000" value="1" aria-label="详情结束时间"><div class="stats-window-labels"><output id="statistics-window-start-label">—</output><output id="statistics-window-end-label">—</output></div></div>
+        <div class="stats-summary-strip"><span>峰值 <strong id="statistics-peak">—</strong> W</span><span>平均 <strong id="statistics-average">—</strong> W</span><span>最高 <strong id="statistics-max-temperature">—</strong> ℃</span></div>
+        <p class="hint stats-chart-footnote" id="statistics-chart-note">按实际时间绘制，缺失处断开</p>
+      </div>
+      <div id="statistics-detail-actions" class="stats-two-actions" hidden><button type="button" id="statistics-export-session" class="secondary"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>导出本次</button><button type="button" id="statistics-delete-session" class="stop"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>删除记录</button></div>
+      <div id="statistics-events-card" class="card" hidden><h2>充电事件</h2><div id="statistics-events" class="stats-events"></div></div>
+      <button type="button" id="statistics-measurement" class="card stats-info-link"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span><strong>数据口径</strong><small>电池净功率 · 双芯折算</small></span><svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></button>
+    </div>
+    <div id="statistics-empty" class="card stats-empty"><svg class="icon" aria-hidden="true"><use href="#i-statistics"/></svg><h2 id="statistics-empty-title">等待充电记录</h2><p class="hint" id="statistics-empty-description">正在读取本机数据…</p><button type="button" id="statistics-empty-settings" class="small-action">记录设置 <span aria-hidden="true">›</span></button></div>
+  </div>
+  <div id="statistics-history" role="tabpanel" aria-labelledby="statistics-tab-history" hidden>
+    <div class="stats-segments stats-date-ranges" role="group" aria-label="历史时间范围"><button type="button" data-stat-range="7" aria-pressed="true">近7天</button><button type="button" data-stat-range="30" aria-pressed="false">近30天</button><button type="button" data-stat-range="90" aria-pressed="false">近90天</button><button type="button" data-stat-range="custom" aria-pressed="false">自定义</button></div>
+    <div class="stats-history-toolbar"><button type="button" id="statistics-filter" class="stats-outline"><svg class="icon" aria-hidden="true"><use href="#i-filter"/></svg><span id="statistics-filter-label">筛选</span></button><button type="button" id="statistics-export-filtered" class="stats-outline"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>导出</button></div>
+    <div class="card stats-aggregate"><div><strong id="statistics-total">—</strong><span>充电记录</span></div><div><strong id="statistics-charging-time">—</strong><span>累计充电</span></div><div><strong id="statistics-history-peak">—</strong><span>最高功率</span></div></div>
+    <div id="statistics-history-list"></div><p id="statistics-history-count" class="hint stats-history-count"></p><button type="button" id="statistics-load-more" class="stats-outline stats-wide" hidden>加载更多</button>
+  </div>
+  <div id="statistics-record-settings" hidden>
+    <p class="section-label">充电统计</p><div class="card stats-settings-card"><div class="setting-row"><div><label for="charge_statistics_enabled">自动记录</label><p class="hint">模块运行时记录，关闭页面仍继续</p></div><input id="charge_statistics_enabled" class="switch" type="checkbox" checked></div></div>
+    <div class="card"><h2>数据保留</h2><div class="segmented" role="group" aria-label="充电统计保留天数"><label><input type="radio" name="charge_statistics_retention_days" value="30"><span>30天</span></label><label><input type="radio" name="charge_statistics_retention_days" value="90" checked><span>90天</span></label><label><input type="radio" name="charge_statistics_retention_days" value="180"><span>180天</span></label></div><p class="hint">到期自动清理历史记录</p><div class="setting-row stats-readonly"><strong>采样间隔</strong><span>5秒</span></div><div class="setting-row stats-readonly"><strong>记录位置</strong><span>仅本机</span></div></div>
+    <div class="card"><div class="card-heading"><h2>本地数据</h2><span class="hint" id="statistics-storage-count">—</span></div><strong id="statistics-storage-bytes" class="stats-storage-bytes">—</strong><p class="hint" id="statistics-storage-dates">—</p><div class="stats-two-actions"><button type="button" id="statistics-export-all" class="stats-outline"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>导出全部</button><button type="button" id="statistics-clear" class="stats-outline stats-danger"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>清理历史</button></div></div>
+    <button type="button" id="statistics-settings-measurement" class="card stats-info-link"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span><strong>数据口径</strong><small>电池净功率 · 双芯折算</small></span><svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></button><p class="footnote">停止模块会暂停记录</p>
+  </div>
+</section>
 <section id="page-preferences" role="tabpanel" aria-labelledby="tab-preferences" hidden>
   <div class="card preferences-card">
     <div class="setting-row preference-choice"><div><h2>外观</h2><p class="hint" id="theme-hint">跟随系统</p></div><div class="segmented" role="group" aria-label="主题"><label><input type="radio" name="theme" value="light"><span>浅色</span></label><label><input type="radio" name="theme" value="dark"><span>深色</span></label><label><input type="radio" name="theme" value="system" checked><span>系统</span></label></div></div>
@@ -207,6 +258,7 @@
 <button type="button" id="tab-overview" role="tab" aria-controls="page-overview" aria-selected="true" tabindex="0"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-pulse"/></svg><span>概览</span></button>
 <button type="button" id="tab-global" role="tab" aria-controls="page-global" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-thermo"/></svg><span>全局</span></button>
 <button type="button" id="tab-charge" role="tab" aria-controls="page-charge" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bolt"/></svg><span>充电</span></button>
+<button type="button" id="tab-statistics" role="tab" aria-controls="page-statistics" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-statistics"/></svg><span>统计</span></button>
 <button type="button" id="tab-preferences" role="tab" aria-controls="page-preferences" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span>设置</span></button>
 </nav>
 <dialog class="export-dialog" id="export-dialog" aria-labelledby="export-title" aria-describedby="export-description">
@@ -215,4 +267,5 @@
   <p class="export-copy-status hint" id="export-copy-status" role="status" aria-live="polite"></p>
   <div class="export-dialog-actions"><button class="primary" id="export-copy" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>复制路径</span></button></div>
 </dialog>
+<dialog id="statistics-dialog" class="export-dialog stats-dialog" aria-labelledby="statistics-dialog-title"><div class="stats-dialog-heading"><h2 id="statistics-dialog-title"></h2><button type="button" id="statistics-dialog-close" class="icon-button" aria-label="关闭弹窗"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><div id="statistics-dialog-body"></div></dialog>
 </body></html>

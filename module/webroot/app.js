@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id);
-const pages={overview:document.title,global:'全局温控',charge:'充电预设',preferences:'设置'};
+const pages={overview:document.title,global:'全局温控',charge:'充电预设',statistics:'充电统计',preferences:'设置'};
 const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge_batt_temp_mc','charge_cpu_temp_mc','charge_gpu_temp_mc','charge_ddr_temp_mc'];
 const counts=new Intl.NumberFormat('en-US');
 const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复待处理',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压',waiting_charge:'等待有线充电',data_error:'状态异常',conflict:'控制冲突',retired:'辅助已停止',pps_waiting:'等待 PPS',pps_armed:'已设置，暂无辅助证据',pps_used:'已参与电流判断',pps_data_unavailable:'原厂停用数据通道',pps_exited:'已退出 PPS',pps_diagnostic_unavailable:'诊断不可用',pps_off:'辅助未启用',pps_retired:'辅助已停止'};
@@ -31,7 +31,7 @@ function message(text,bad=false,kind='runtime'){
 function controls(){
   const unavailable=busy||!CG.available();
   for(const node of document.querySelectorAll('.backend'))node.disabled=unavailable;
-  for(const node of document.querySelectorAll('#settings input:not([name=theme])'))node.disabled=unavailable||!config;
+  for(const node of document.querySelectorAll('#settings input:not([name=theme]):not([data-stat-input])'))node.disabled=unavailable||!config;
   for(const node of document.querySelectorAll('[name=charge_horae_mode]'))node.disabled=unavailable||!config||!$('charge_horae_enabled').checked;
   for(const button of document.querySelectorAll('[data-adjust]')){
     const slider=$(button.dataset.target),v=Number(slider.value),step=Number(button.dataset.adjust);
@@ -47,6 +47,7 @@ function controls(){
   $('power-limit-controls').classList.toggle('temporarily-disabled',!$('charge_power_limit_enabled').checked);
   $('export').disabled=unavailable||exporting;
   $('savebar').hidden=!dirty||currentPage==='overview';
+  CGStatistics.controls({page:currentPage,unavailable});
 }
 function labels(){
   const power=$('charge_power_limit_watts'),watts=Number(power.value);
@@ -71,6 +72,9 @@ function populate(next){
   for(const radio of document.querySelectorAll('[name=write_mode]'))radio.checked=radio.value===(next.write_mode||'event');
   $('charge_power_limit_watts').value=next.charge_power_limit_watts??50;
   for(const node of document.querySelectorAll('[name=charge_power_limit_protocols]'))node.checked=(next.charge_power_limit_protocols??['supervooc']).includes(node.value);
+  $('charge_statistics_enabled').checked=next.charge_statistics_enabled!==false;
+  for(const node of document.querySelectorAll('[name=charge_statistics_retention_days]'))node.checked=Number(node.value)===(next.charge_statistics_retention_days??90);
+  CGStatistics.config(next);
   dirty=false;labels();controls();
 }
 function page(key){
@@ -80,6 +84,7 @@ function page(key){
     $('page-'+name).hidden=name!==key;$('tab-'+name).setAttribute('aria-selected',String(name===key));$('tab-'+name).tabIndex=name===key?0:-1;
   }
   setText($('page-title'),pages[key]);
+  CGStatistics.page(key);
   if(key==='overview'&&$('message').dataset.kind==='config')message('');
   controls();$('content').scrollTop=pageScroll.get(key)||0;
   if(key==='preferences'){if(lastStatus)renderBackends(lastStatus);loadLogs();}
@@ -134,6 +139,7 @@ function clearTelemetry(){
 function paintState(node,label,tone){setText(node,label);node.dataset.tone=tone;}
 function render(data){
   lastStatus=data;
+  CGStatistics.status(data);
   if(data.device_info)setText($('oem-version'),[data.device_info.model,data.device_info.oem_version].filter(Boolean).join(' · '));
   const s=data.status||{},active=data.worker_alive||data.guardian_alive,fresh=!!data.fresh,idle=s.profile==='idle';
   const phase=fresh?(idle?'待机观察':s.phase==='partial'?'部分重试':s.phase==='degraded'?'兼容性待验证':s.phase==='repair_wait'?'等待修复':'运行中'):data.worker_alive?'等待更新':data.guardian_alive?'等待重启':'已停止';
@@ -426,6 +432,8 @@ async function save(event){
     if($('charge_power_limit_enabled').checked&&!next.charge_power_limit_protocols.length)throw new Error('请至少选择一个限功率协议');
     for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_screen_fast','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])next[key]=$(key).checked;
     next.charge_horae_mode=document.querySelector('[name=charge_horae_mode]:checked').value;next.write_mode=document.querySelector('[name=write_mode]:checked').value;
+    next.charge_statistics_enabled=$('charge_statistics_enabled').checked;
+    next.charge_statistics_retention_days=Number(document.querySelector('[name=charge_statistics_retention_days]:checked').value);
     const result=await CG.call('configure-hex',CG.hex({expected_revision:config.revision,config:next}));populate(result.config);message('设置已保存',false,'config');
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}
   finally{busy=false;controls();await refresh();}
@@ -522,7 +530,7 @@ for(const button of document.querySelectorAll('[data-adjust]'))button.onclick=()
   if(button.disabled)return;const slider=$(button.dataset.target),next=Math.max(Number(slider.min),Math.min(Number(slider.max),Number(slider.value)+Number(button.dataset.adjust)));
   if(next===Number(slider.value))return;slider.value=String(next);slider.dispatchEvent(new Event('input',{bubbles:true}));slider.dispatchEvent(new Event('change',{bubbles:true}));
 };
-$('settings').addEventListener('input',event=>{if(event.target.name==='theme')return;dirty=true;labels();controls();});$('settings').addEventListener('submit',save);
+$('settings').addEventListener('input',event=>{if(event.target.name==='theme'||event.target.hasAttribute('data-stat-input'))return;dirty=true;labels();controls();});$('settings').addEventListener('submit',save);
 function tabKeys(buttons,select){for(const [i,button] of buttons.entries())button.addEventListener('keydown',event=>{
   let index;if(event.key==='ArrowRight')index=(i+1)%buttons.length;else if(event.key==='ArrowLeft')index=(i+buttons.length-1)%buttons.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=buttons.length-1;else return;
   event.preventDefault();buttons[index].focus();select(index);
@@ -563,8 +571,9 @@ for(const button of document.querySelectorAll('[data-backend-filter]'))button.on
 $('discard').onclick=async()=>{
   if(busy)return;requestEpoch++;busy=true;controls();try{populate(await CG.call('config'));message('已载入保存的设置',false,'config');}catch(error){message(error.message,true);}finally{busy=false;controls();}
 };
-function pausePolling(){pollingActive=false;pollGeneration++;requestEpoch++;if(pollTimer!==null)clearTimeout(pollTimer);pollTimer=null;}
+function pausePolling(){pollingActive=false;pollGeneration++;requestEpoch++;if(pollTimer!==null)clearTimeout(pollTimer);pollTimer=null;CGStatistics.visibility(false);}
 function resumePolling(){
+  CGStatistics.visibility(viewOpen);
   if(document.hidden||!viewOpen||!CG.available()){pausePolling();return;}if(pollingActive)return;pollingActive=true;
   const generation=pollGeneration;
   const tick=async()=>{

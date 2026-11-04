@@ -33,6 +33,9 @@ impl PowerProtocol {
 fn power_watts() -> u32 {
     50
 }
+fn statistics_retention_days() -> u32 {
+    90
+}
 fn power_protocols() -> Vec<PowerProtocol> {
     vec![PowerProtocol::Supervooc]
 }
@@ -46,6 +49,10 @@ pub struct Config {
     pub write_mode: WriteMode,
     #[serde(default)]
     pub detailed_logging: bool,
+    #[serde(default = "yes")]
+    pub charge_statistics_enabled: bool,
+    #[serde(default = "statistics_retention_days")]
+    pub charge_statistics_retention_days: u32,
     #[serde(default)]
     pub global_enabled: bool,
     pub horae_stop: bool,
@@ -90,6 +97,8 @@ impl Default for Config {
             enabled: true,
             write_mode: WriteMode::Event,
             detailed_logging: false,
+            charge_statistics_enabled: true,
+            charge_statistics_retention_days: statistics_retention_days(),
             global_enabled: false,
             horae_stop: true,
             charge_trigger: true,
@@ -114,6 +123,9 @@ impl Default for Config {
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        if ![30, 90, 180].contains(&self.charge_statistics_retention_days) {
+            return Err("statistics_retention_invalid".into());
+        }
         let unique = self
             .charge_power_limit_protocols
             .iter()

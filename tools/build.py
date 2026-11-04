@@ -4,6 +4,7 @@ import argparse,html,json,os,pathlib,re,shutil,stat,subprocess,sys,tomllib,zipfi
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 RUNTIME=('module.prop','customize.sh','service.sh','post-fs-data.sh','uninstall.sh','action.sh','skip_mount',
          'webroot/index.html','webroot/style.css','webroot/theme.js','webroot/bridge.js','webroot/app.js',
+         'webroot/statistics.js','webroot/statistics.css',
          'META-INF/com/google/android/update-binary','META-INF/com/google/android/updater-script')
 SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattributes','.gitignore')
 BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py','kernel/charging-contracts.json',
@@ -165,6 +166,10 @@ def cooling_listener(env,llvm,binary):
     print('Cooling event transport:',binary)
 def build(a,m):
     env,sdk,ndk,llvm=android_tools(a)
+    # Keep symbols in Windows host build scripts. The local release crc32fast
+    # build executable was refused by Windows without them. This override does
+    # not change the Android release profile or shipped ELF debug/strip flags.
+    if os.name=='nt':env.setdefault('CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_DEBUG','2')
     assert run(['rustc','--version'],capture_output=True,text=True).stdout.startswith('rustc 1.85.1 ')
     jdk=pathlib.Path(a.jdk or env.get('JAVA_HOME') or pathlib.Path(shutil.which('javac') or '').parent.parent).resolve()
     exe='.exe' if os.name=='nt' else '';java=jdk/'bin'/('java'+exe);javac=jdk/'bin'/('javac'+exe)

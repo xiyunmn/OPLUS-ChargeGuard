@@ -106,6 +106,14 @@ pub struct Lock {
 }
 impl Lock {
     pub fn take(p: &Path) -> Result<Self> {
+        Self::acquire(p, libc::LOCK_EX | libc::LOCK_NB)
+    }
+    /// Short shared-data transactions serialize; lifecycle ownership still
+    /// uses `take` and must not wait for another owner.
+    pub fn wait(p: &Path) -> Result<Self> {
+        Self::acquire(p, libc::LOCK_EX)
+    }
+    fn acquire(p: &Path, operation: i32) -> Result<Self> {
         secure_dir(p.parent().ok_or("missing_parent")?)?;
         regular(p)?;
         let f = OpenOptions::new()
@@ -117,7 +125,7 @@ impl Lock {
             .custom_flags(libc::O_NOFOLLOW)
             .open(p)
             .map_err(|e| e.to_string())?;
-        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        if unsafe { libc::flock(f.as_raw_fd(), operation) } != 0 {
             return Err("owner_lock_busy".into());
         }
         Ok(Self { _file: f })

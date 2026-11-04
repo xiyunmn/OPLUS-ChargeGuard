@@ -5,9 +5,9 @@
   let sequence=0;
   function available(){return !!(root.ksu && typeof root.ksu.exec==='function');}
   function command(verb,payload){
-    if(verb==='configure-hex'){
-      if(typeof payload!=='string'||payload.length>8192||payload.length%2||!/^[0-9a-f]+$/.test(payload))throw Error('非法配置编码');
-      return executable+' configure-hex '+payload;
+    if(verb==='configure-hex'||verb==='statistics-hex'){
+      if(typeof payload!=='string'||payload.length>8192||payload.length%2||!/^[0-9a-f]+$/.test(payload))throw Error(verb==='configure-hex'?'非法配置编码':'非法统计请求编码');
+      return executable+' '+verb+' '+payload;
     }
     if(!verbs.has(verb)||payload!==undefined)throw Error('非法后端命令');
     return executable+' '+verb;
