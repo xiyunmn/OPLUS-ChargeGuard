@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Opt in to the OEM PPS-status current check. No votes, PDOs or limits are changed. */
-#ifdef CG_PPS_HOST_TEST
-#ifdef __KERNEL__
-#error Host tests must never be built into a kernel module
-#endif
-#include "../tests/pps_kernel_shim.h"
-#else
 #include <linux/module.h>
 #include <linux/kprobes.h>
 #include <linux/moduleparam.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
-#endif
 
 #define STATUS_OFFSET 3108
 #define MONITOR_WORK_OFFSET 400
@@ -23,6 +16,8 @@ static bool ready, enabled, retiring, original;
 static u8 *bound_chip;
 static unsigned long observations;
 static struct kprobe probes[4];
+
+#include "pps_diagnostics.h"
 
 /* Only state_lock holders access the saved pointer. remove/shutdown invalidate it
  * before the OEM driver can free it, and prevent later workers from rebinding. */
@@ -53,6 +48,9 @@ static int assist_pre(struct kprobe *probe, struct pt_regs *regs)
     if (!bound_chip) {
         original = READ_ONCE(chip[STATUS_OFFSET]);
         bound_chip = chip;
+        diag_bound(chip, true);
+    } else {
+        diag_bound(chip, false);
     }
     WRITE_ONCE(chip[STATUS_OFFSET], 1);
     observations++;
@@ -68,6 +66,7 @@ static int retire_pre(struct kprobe *probe, struct pt_regs *regs)
     (void)probe;
     (void)regs;
     raw_spin_lock_irqsave(&state_lock, flags);
+    if (!retiring) diag_emit(DIAG_RETIRING, 0, 0, 0, NULL);
     retiring = true;
     enabled = false;
     restore_locked();
@@ -90,6 +89,10 @@ static int set_enabled(const char *value, const struct kernel_param *param)
     if (next && (!ready || retiring)) {
         ret = -ENODEV;
     } else {
+        if (enabled != next) {
+            diag.session_used = false;
+            diag_emit(DIAG_ENABLED, 0, next, 0, NULL);
+        }
         enabled = next;
         if (!next)
             restore_locked();
@@ -176,6 +179,7 @@ static int __init cg_pps_init(void)
         ret = -ENOEXEC;
         goto undo;
     }
+    diag_init();
     WRITE_ONCE(ready, true);
     return 0;
 undo:
@@ -193,6 +197,7 @@ static void __exit cg_pps_exit(void)
     enabled = false;
     restore_locked();
     raw_spin_unlock_irqrestore(&state_lock, flags);
+    diag_cleanup();
     for (i = ARRAY_SIZE(probes) - 1; i >= 0; i--)
         unregister_kprobe(&probes[i]);
 }

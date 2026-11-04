@@ -35,5 +35,18 @@
     "oplus_pps_shutdown": "66717c151fea0708ae0d1120891530c89fe7e4775c94c3cd51b91c6c6ae3f061",
     "oplus_pps_switch_check_work": "59326c2d0f219962a7ef923bc77f2f11d44ff0084fc424cd6323d525c8e04a49",
     "oplus_third_pps_target_voltage_check": "69923c626dba5c953174ecdcda1c8a361ea5960db77fcae30f223adc8b317edf"
+  },
+  "screen": {
+    "oplus_mms_get_by_name": "112607339bcdb36d2b472db43e550947b1e4d3bff67757b881b8419fea9191e9",
+    "oplus_mms_get_item_data": "cbe5aeb28d2fea850ba353e4d7ebd377ba684ed029a1d0c451ca15d8c087778e",
+    "oplus_mms_subscribe": "94e962c26d6f236b1e6411bfed46c14d83426c295b4baac0b50c4e94a43786f5",
+    "oplus_mms_unsubscribe": "77a433fd6fa9d93c4af9157f53b59fd63c7c14d4ee47e7b58136028948dbceac",
+    "oplus_mms_put": "4f8377b137f02dd6ebab1f364e5e8ed57710f4e3490a425816997e3a5cfcd0ff",
+    "oplus_mms_alloc_msg": "b5d6f65f17c2f4f0cd31b87f6f106e302fc5c3334e6c6708e73d2d0e3372f8db",
+    "oplus_mms_publish_msg_sync": "e67df0e7fa974bd5a111e485e4fbab34c497ee4eabd150b78dc6cf5b7ccb38af",
+    "oplus_comm_update_led_on": "c05d6e4682d8925e255e70f99be3ebe42dada6a40b8c6b08a62ef473e06ffd0b",
+    "oplus_mms_item_update": "f1fc32f37dda5a3e8558f282229aeda16098ee35b135c1620336690a7c8922b9",
+    "__oplus_mms_publish_msg": "d2df5a02ce2ba8bf20daa4af452fc4069dc8070d3e00a6fb1a4a7e992e5e4e4f",
+    "oplus_mms_wired_item": "dec78ef1a5da3ac07d59cf02b3cb6a1a0b12a2e1917cbc4f776cefb1dfb6cd4d"
   }
 }

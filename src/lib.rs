@@ -18,6 +18,7 @@ pub mod maintenance_events;
 pub mod power;
 pub mod pps;
 pub mod runtime;
+pub mod screen;
 pub mod storage;
 pub type Result<T> = std::result::Result<T, String>;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

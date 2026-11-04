@@ -300,6 +300,53 @@ impl<'a> Elf<'a> {
             .ok_or("probe_word_offset")?;
         Ok(n(range(self.bytes, sec.offset, sec.size)?, at as usize, 4)? as u32)
     }
+    fn check_screen_item(&self) -> Result<()> {
+        // Check the single message relationship; unrelated common items may change.
+        let table = self.symbol("oplus_comm_item")?;
+        if table.kind != 1 || table.size % 128 != 0 || table.size > 256 * 128 {
+            return Err("probe_screen_item_layout".into());
+        }
+        let data = self.data(table)?;
+        let offsets = (0..data.len())
+            .step_by(128)
+            .filter(|at| data[*at..*at + 4] == 16u32.to_le_bytes())
+            .collect::<Vec<_>>();
+        if offsets.len() != 1
+            || data[offsets[0] + 4..offsets[0] + 24]
+                .iter()
+                .any(|b| *b != 0)
+        {
+            return Err("probe_screen_item_identity".into());
+        }
+        let wanted = table.value + offsets[0] as u64 + 24;
+        let mut matched = false;
+        for r in self
+            .sections
+            .iter()
+            .filter(|r| r.kind == 4 && r.info == table.section)
+        {
+            if r.entry != 24 || r.size % 24 != 0 || r.link != self.symtab {
+                return Err("probe_screen_item_relocations".into());
+            }
+            let raw = range(self.bytes, r.offset, r.size)?;
+            for p in (0..raw.len()).step_by(24) {
+                if n(raw, p, 8)? != wanted {
+                    continue;
+                }
+                let info = n(raw, p + 8, 8)?;
+                let target =
+                    self.relocation_target((info >> 32) as usize, n(raw, p + 16, 8)? as i64)?;
+                if matched || info as u32 != 257 || target != "symbol:oplus_comm_update_led_on+0" {
+                    return Err("probe_screen_item_callback".into());
+                }
+                matched = true;
+            }
+        }
+        if !matched {
+            return Err("probe_screen_item_callback_missing".into());
+        }
+        Ok(())
+    }
     pub fn check_abi(&self, expected: &BTreeMap<String, u64>) -> Result<usize> {
         let raw = self.section("__versions")?;
         if raw.len() % 64 != 0 {
@@ -338,13 +385,16 @@ impl<'a> Elf<'a> {
 struct Contracts {
     pps: BTreeMap<String, String>,
     power: BTreeMap<String, String>,
+    screen: BTreeMap<String, String>,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Evidence {
     pub pps: bool,
     pub power: bool,
+    pub screen: bool,
     pub pps_error: Option<String>,
     pub power_error: Option<String>,
+    pub screen_error: Option<String>,
 }
 pub fn inspect(bytes: &[u8]) -> Result<Evidence> {
     let elf = Elf::parse(bytes)?;
@@ -382,10 +432,46 @@ pub fn inspect(bytes: &[u8]) -> Result<Evidence> {
         }
         Ok(())
     })();
+    let screen = (|| -> Result<()> {
+        check(&contracts.screen)?;
+        elf.check_screen_item()?;
+        let profile: serde_json::Value =
+            serde_json::from_str(include_str!("../kernel/screen-target.json"))
+                .map_err(|e| e.to_string())?;
+        for (symbol, anchor) in profile["anchors"]
+            .as_object()
+            .ok_or("probe_screen_anchors")?
+        {
+            if elf.word(symbol, -4)? as u64 != anchor["kcfi"].as_u64().ok_or("probe_screen_kcfi")? {
+                return Err(format!("probe_screen_kcfi_changed:{symbol}"));
+            }
+            for i in 0..3 {
+                if elf.word(symbol, (i * 4) as i64)? as u64
+                    != anchor["entry"][i].as_u64().ok_or("probe_screen_entry")?
+                {
+                    return Err(format!("probe_screen_entry_changed:{symbol}"));
+                }
+            }
+        }
+        for (offset, word) in profile["led_hook"]["words"]
+            .as_object()
+            .ok_or("probe_screen_hook")?
+        {
+            let offset = offset.parse::<i64>().map_err(|_| "probe_screen_offset")?;
+            if elf.word("oplus_comm_update_led_on", offset)? as u64
+                != word.as_u64().ok_or("probe_screen_word")?
+            {
+                return Err("probe_screen_output_changed".into());
+            }
+        }
+        Ok(())
+    })();
     Ok(Evidence {
         pps: pps.is_ok(),
         power: power.is_ok(),
+        screen: screen.is_ok(),
         pps_error: pps.err(),
         power_error: power.err(),
+        screen_error: screen.err(),
     })
 }

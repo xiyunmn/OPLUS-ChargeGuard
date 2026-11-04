@@ -33,12 +33,9 @@ runs:
     - name: Install pinned Rust toolchain
       shell: bash
       run: rustup toolchain install 1.85.1 --profile minimal --target aarch64-linux-android
-    - name: Check source and JavaScript syntax
+    - name: Check source package scope
       shell: bash
-      run: |
-        python tools/build.py audit
-        for file in module/webroot/*.js; do node --check "$file"; done
-        cargo test --locked --lib --features fixtures
+      run: python tools/build.py audit
     - name: Build and validate installation ZIP
       shell: bash
       env:

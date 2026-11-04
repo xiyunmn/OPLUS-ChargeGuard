@@ -1,9 +1,11 @@
 {
   "_raw_spin_lock_irqsave": 886768907,
   "_raw_spin_unlock_irqrestore": 3546074736,
+  "ktime_get_with_offset": 3304118802,
   "memset": 3703006381,
   "module_layout": 1311207223,
   "register_kprobe": 74633019,
   "snprintf": 1701726830,
+  "strcmp": 3805619546,
   "unregister_kprobe": 3950555629
 }

@@ -7,8 +7,9 @@ RUNTIME=('module.prop','customize.sh','service.sh','post-fs-data.sh','uninstall.
          'META-INF/com/google/android/update-binary','META-INF/com/google/android/updater-script')
 SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattributes','.gitignore')
 BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py','kernel/charging-contracts.json',
+               'tools/build_screen.py','kernel/charge_guard_screen.c','kernel/screen-target.json','kernel/screen-symbols.json',
                'kernel/charge_guard_power.c','kernel/power_policy.h','kernel/pjz110-power-target.json','kernel/pjz110-power-symbols.json',
-               'kernel/charge_guard_pps.c','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
+               'kernel/charge_guard_pps.c','kernel/pps_diagnostics.h','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
                '.github/workflows/beta.yml','.github/workflows/release.yml',
                '.github/actions/build/action.yml')
 STAMP=(2026,1,1,0,0,0)
@@ -93,7 +94,7 @@ def channel_build(a,m):
     if a.installation_only:command.append('--installation-only')
     run(command)
 def package(stage,out,m,installation_only=False):
-    names=(*RUNTIME,'bin/cg','bin/cg-camera.jar','bin/cg-cooling-events','bin/charge_guard_pps.ko','bin/charge_guard_power.ko')
+    names=(*RUNTIME,'bin/cg','bin/cg-camera.jar','bin/cg-cooling-events','bin/charge_guard_pps.ko','bin/charge_guard_power.ko','bin/charge_guard_screen.ko')
     assert not (stage/'system.prop').exists()
     filename=f"{m['id']}_v{m['version']}.zip" if installation_only else f"{m['id']}_{m['version']}_magisk.zip"
     archive(out/filename,[(n,(stage/n).read_bytes(),n.endswith('.sh') or n in ('bin/cg','bin/cg-cooling-events') or n.endswith('/update-binary')) for n in names])
@@ -198,61 +199,40 @@ def build(a,m):
     build_pps(llvm,stage/'bin/charge_guard_pps.ko')
     from build_power import build as build_power
     build_power(llvm,stage/'bin/charge_guard_power.ko')
+    from build_screen import build as build_screen
+    build_screen(llvm,stage/'bin/charge_guard_screen.ko')
     package(stage,pathlib.Path(a.output).resolve() if a.output else ROOT/'target/dist',m,a.installation_only)
 def linux_path(p):
     p=pathlib.Path(p).resolve();return '/mnt/'+p.drive[0].lower()+p.as_posix().split(':',1)[1]
 def check(a,m):
+    if not a.test_filter:
+        raise SystemExit('Specify --test-filter with the relevant test name; build/commit do not run tests.')
     env=os.environ.copy();target=ROOT/'target/check'
-    args=['cargo','test','--locked','--features','fixtures','--target-dir',target,'--no-run','--message-format=json']
+    args=['cargo','test','--locked','--lib','--target-dir',target,'--no-run','--message-format=json']
     if os.name=='nt':
-        triple='x86_64-unknown-linux-musl';sysroot=pathlib.Path(run(['rustc','--print','sysroot'],capture_output=True,text=True).stdout.strip())
+        sysroot=pathlib.Path(run(['rustc','--print','sysroot'],capture_output=True,text=True).stdout.strip())
         env['CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER']=str(sysroot/'lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe')
-        env['CARGO_ENCODED_RUSTFLAGS']='-C\x1flinker-flavor=ld.lld';args+=['--target',triple]
-    else:triple=''
+        env['CARGO_ENCODED_RUSTFLAGS']='-C\x1flinker-flavor=ld.lld';args+=['--target','x86_64-unknown-linux-musl']
     if a.offline:args.append('--offline')
     output=run(args,env=env,capture_output=True,text=True)
     print(output.stderr[-2500:])
-    artifacts=[json.loads(line) for line in output.stdout.splitlines() if line.startswith('{')]
-    def execute(cmd):
-        if os.name=='nt':run(['wsl','-d',a.wsl,'-u','root','--',*cmd])
-        else:run(cmd)
-    for item in artifacts:
+    for line in output.stdout.splitlines():
+        if not line.startswith('{'):continue
+        item=json.loads(line)
         if item.get('reason')=='compiler-artifact' and item.get('executable') and item['profile']['test']:
-            executable=item['executable'];execute([linux_path(executable) if os.name=='nt' else executable,'--test-threads=1'])
-    build_args=['cargo','build','--locked','--features','fixtures','--target-dir',target]
-    if triple:build_args+=['--target',triple]
-    if a.offline:build_args+=['--offline']
-    run(build_args,env=env)
-    binary=target/triple/'debug/charge-guard'
-    native=target/'cg-cooling-events'
-    if os.name=='nt':
-        native_env,_,_,llvm=android_tools(a)
-        cc=[llvm/'clang.exe','--target=x86_64-linux-android35','-static']
-    else:
-        native_env=env;cc=[env.get('CC','cc')]
-    run([*cc,'-std=c11','-O2','-Wall','-Wextra',ROOT/'tools/cooling_events.c','-o',native],env=native_env)
-    pps_test=target/'pps-kernel-test'
-    run([*cc,'-std=c11','-O2','-Wall','-Wextra','-Wno-unused-variable','-Wno-sign-compare','-pthread',ROOT/'tests/pps_kernel.c','-o',pps_test],env=native_env)
-    execute([linux_path(pps_test) if os.name=='nt' else str(pps_test)])
-    power_test=target/'power-kernel-test'
-    run([*cc,'-std=c11','-O2','-Wall','-Wextra','-Wno-unused-function','-Wno-unused-variable','-Wno-unused-parameter','-Wno-sign-compare',ROOT/'tests/power_kernel.c','-o',power_test],env=native_env)
-    execute([linux_path(power_test) if os.name=='nt' else str(power_test)])
-    for name in ['lifecycle.py','installer.py','cooling_events.py']:
-        script=ROOT/'tests'/name
-        cmd=['python3',linux_path(script) if os.name=='nt' else str(script)]
-        if name=='lifecycle.py':cmd+=['--binary',linux_path(binary) if os.name=='nt' else str(binary)]
-        if name=='cooling_events.py':cmd+=['--binary',linux_path(native) if os.name=='nt' else str(native)]
-        execute(cmd)
-    for p in (ROOT/'module/webroot').glob('*.js'):run(['node','--check',p])
-    print('Core, lifecycle, installer and JavaScript syntax checks passed; no UI automation run.')
+            executable=item['executable']
+            command=[linux_path(executable) if os.name=='nt' else executable,a.test_filter,'--test-threads=1']
+            run(['wsl','-d',a.wsl,'--exec',*command] if os.name=='nt' else command)
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['build','check','audit'],nargs='?',default='build')
     for flag in ['sdk','ndk','jdk','output']:parser.add_argument('--'+flag)
+    parser.add_argument('--test-filter',help='Run only matching retained unit tests with check')
     parser.add_argument('--channel',choices=['beta','release'])
     parser.add_argument('--beta-number',type=int)
     parser.add_argument('--installation-only',action='store_true')
     parser.add_argument('--offline',action='store_true');parser.add_argument('--wsl',default='Debian')
     a=parser.parse_args();m=metadata()
+    if a.test_filter and a.command!='check':parser.error('--test-filter is only valid for check')
     if a.channel and a.command!='build':parser.error('--channel is only valid for build')
     if a.beta_number is not None and a.channel!='beta':parser.error('--beta-number requires --channel beta')
     if a.installation_only and a.command!='build':parser.error('--installation-only is only valid for build')

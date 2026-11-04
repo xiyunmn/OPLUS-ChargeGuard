@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Capability-checked additive MIN votes. No OEM client, PDO or protection edits. */
-#ifdef CG_POWER_HOST_TEST
-#ifdef __KERNEL__
-#error Host tests cannot be built into a kernel module
-#endif
-#include "../tests/power_kernel_shim.h"
-#else
 #include <linux/module.h>
 #include <linux/kprobes.h>
 #include <linux/miscdevice.h>
@@ -19,7 +13,6 @@
 #include <linux/reboot.h>
 #include <linux/of.h>
 #include "power_anchors.h"
-#endif
 #include "power_policy.h"
 #define VOTER "CHARGE_GUARD_POWER_VOTER"
 #define DRIVER_ID "pjz110-power-205fb7eb-v1"

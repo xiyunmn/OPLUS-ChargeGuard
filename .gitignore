@@ -64,6 +64,7 @@
 !/tools/build_pps.py
 !/kernel/
 !/kernel/charge_guard_pps.c
+!/kernel/pps_diagnostics.h
 !/kernel/pjz110-headers.tar.xz
 !/kernel/pjz110-symbols.json
 !/kernel/pjz110-target.json
@@ -92,3 +93,9 @@ __pycache__/
 !/kernel/charging-contracts.json
 !/observer/src/com/chargeguard/DexContract.java
 !/observer/src/com/chargeguard/EngineerInfo.java
+
+!/src/screen.rs
+!/kernel/charge_guard_screen.c
+!/kernel/screen-target.json
+!/kernel/screen-symbols.json
+!/tools/build_screen.py

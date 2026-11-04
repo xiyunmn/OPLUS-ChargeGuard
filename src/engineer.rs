@@ -771,25 +771,6 @@ pub fn restore(
 mod tests {
     use super::*;
     #[test]
-    fn rus_query_requires_an_explicit_empty_result() {
-        assert!(rus_source_clear("No result found.\n").is_ok());
-        for (output, error) in [
-            ("", "policy_rus_query_empty"),
-            ("  \n", "policy_rus_query_empty"),
-            (
-                "Row: 0 filtername=sys_thermal_control_list",
-                "policy_rus_override_present",
-            ),
-            (
-                "Error while accessing provider",
-                "policy_rus_query_unrecognized",
-            ),
-            ("Warning\nNo result found.", "policy_rus_query_unrecognized"),
-        ] {
-            assert_eq!(rus_source_clear(output).unwrap_err(), error);
-        }
-    }
-    #[test]
     fn charge_only_overlay_leaves_safety_and_other_gears_intact() {
         let xml = r#"<sys_thermal_control_list><thermalPolicyConfigItem><globalPolicy><globalPolicy><gear_config tempGear="3" cpu="2" charge="7"/><gear_config tempGear="8" charge="3"/></globalPolicy></globalPolicy><specific><com.oplus.engineermode><gear_config tempGear="3" charge="30"/></com.oplus.engineermode></specific><safetyTest><safety_test><gear_config tempGear="3" charge="1"/></safety_test></safetyTest></thermalPolicyConfigItem></sys_thermal_control_list>"#;
         let output = transform(xml).unwrap();

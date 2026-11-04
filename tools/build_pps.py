@@ -61,6 +61,9 @@ def build(llvm,output,name="charge_guard_pps",profile_name="pjz110-target.json",
     if name=='charge_guard_power':
         from build_power import write_anchors
         write_anchors(profile,work/'power_anchors.h')
+    elif name=='charge_guard_screen':
+        from build_screen import write_anchors
+        write_anchors(profile,work/'screen_anchors.h')
     obj=work/(name+'.o')
     subprocess.run([compiler,*flags,'-c',KERNEL/(name+'.c'),'-o',obj],check=True)
     symbols=json.loads((KERNEL/symbols_name).read_text())
@@ -96,7 +99,7 @@ static const struct modversion_info cg_versions[] __used __section("__versions")
     assert not (undefined(output)-imports), 'unversioned imports introduced by module metadata'
     raw=output.read_bytes()
     assert profile['api'].encode() in raw
-    consumer=(ROOT/('src/pps.rs' if name=='charge_guard_pps' else 'src/power.rs')).read_text(encoding='utf-8')
+    consumer=(ROOT/('src/'+{'charge_guard_pps':'pps','charge_guard_power':'power','charge_guard_screen':'screen'}[name]+'.rs')).read_text(encoding='utf-8')
     assert profile['api'] in consumer
     if name=='charge_guard_pps':assert all(profile[k] in consumer for k in ('kernel_release','driver_sha256'))
     assert b'__kcfi_typeid_' in raw, 'KCFI metadata required'

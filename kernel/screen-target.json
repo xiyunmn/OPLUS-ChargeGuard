@@ -1,0 +1,94 @@
+{
+  "kernel_release": "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k",
+  "headers_sha256": "70e782864b6518a0c5895249691d2a70cfe0ac45542d0193f2c92680ec003490",
+  "driver_sha256": "b04f11538874d192bd571c9516050dc109f6615f417590b41b38704d0f96b3f9",
+  "source": "Original kernel IKHEADERS/ABI with per-interface evidence; model and whole driver hash do not gate eligibility. No firmware distributed.",
+  "api": "charge-guard-screen-v1",
+  "anchors": {
+    "oplus_mms_get_by_name": {
+      "kcfi": 1141256189,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_mms_get_item_data": {
+      "kcfi": 2997018989,
+      "entry": [
+        3573752639,
+        2847702013,
+        2835439608
+      ]
+    },
+    "oplus_mms_subscribe": {
+      "kcfi": 2395247263,
+      "entry": [
+        3573752639,
+        3506766847,
+        2836364285
+      ]
+    },
+    "oplus_mms_unsubscribe": {
+      "kcfi": 608852847,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_mms_put": {
+      "kcfi": 4266203396,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_mms_alloc_msg": {
+      "kcfi": 1817838251,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_mms_publish_msg_sync": {
+      "kcfi": 2097786304,
+      "entry": [
+        3573752639,
+        2847833085,
+        4177529843
+      ]
+    },
+    "oplus_comm_update_led_on": {
+      "kcfi": 3895611763,
+      "entry": [
+        3573752639,
+        2847833085,
+        4177529843
+      ]
+    }
+  },
+  "led_hook": {
+    "symbol": "oplus_comm_update_led_on",
+    "offset": 48,
+    "words": {
+      "20": 2852193267,
+      "32": 2852127720,
+      "36": 1384271465,
+      "40": 706675680,
+      "44": 946432264,
+      "48": 3103785576
+    }
+  },
+  "common_led": {
+    "table": "oplus_comm_item",
+    "id": 16,
+    "stride": 128,
+    "update_offset": 24,
+    "data_offset": 96,
+    "overwritten_offset": 112,
+    "overwrite_data_offset": 120
+  }
+}

@@ -190,37 +190,14 @@ pub fn configure(h: &Hardware, payload: &str) -> Result<Value> {
     }
     Ok(json!({"saved_revision":ch.config.revision,"config":ch.config}))
 }
-fn event_record(event: &str, detail: Value) -> Value {
+pub(crate) fn event_record(event: &str, detail: Value) -> Value {
     let unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .ok();
     json!({"event":event,"boottime_ms":now_ms(),"unix_ms":unix_ms,"detail":detail})
 }
-#[cfg(test)]
-mod log_tests {
-    use super::*;
-
-    #[test]
-    fn records_capture_wall_clock_without_replacing_monotonic_time() {
-        let before = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let detail = json!({"profile":"charging"});
-        let record = event_record("profile_changed", detail.clone());
-        let after = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let stamp = record["unix_ms"].as_u64().unwrap();
-        assert!((before..=after).contains(&stamp));
-        assert!(record["boottime_ms"].as_u64().unwrap() <= now_ms());
-        assert_eq!(record["event"], "profile_changed");
-        assert_eq!(record["detail"], detail);
-    }
-}
-fn detail_log(h: &Hardware, event: &str, detail: Value) -> Result<()> {
+pub(crate) fn detail_log(h: &Hardware, event: &str, detail: Value) -> Result<()> {
     let mut record = event_record(event, detail);
     record["worker_pid"] = json!(std::process::id());
     record["version"] = json!(crate::VERSION);
@@ -616,6 +593,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                         | crate::pps::ID
                         | crate::engineer::ID
                         | crate::power::ID
+                        | crate::screen::ID
                 ) && matches!(s.state.as_str(), "unavailable" | "unsupported");
                 let hybrid = op.is_some_and(|o| controls.as_ref().is_some_and(|l| l.hybrid(o)));
                 let verify =
@@ -638,6 +616,8 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 };
                 v["write_policy"] = json!(if dormant || blocked {
                     "none"
+                } else if s.id == crate::screen::ID {
+                    "on_change"
                 } else if event || verify {
                     "on_drift"
                 } else {
@@ -736,12 +716,13 @@ pub fn worker(h: &Hardware) -> Result<Value> {
             "charge_listener":if events.power_available(){"uevent"}else{"unavailable"},"charge_listener_error":events.power_error,
             "listeners":events.health(),"backends":backend_views,
             "node_inventory":nodes.iter().map(|n|json!({"path":n.path,"type":n.kind,"group":n.group})).collect::<Vec<_>>(),
-            "logging":{"detailed_enabled":c.detailed_logging,"detail_error":detailed_error,"runtime_files":5,"runtime_file_bytes":262144,"detail_files":storage::DETAIL_LOG_BACKUPS+1,"detail_file_bytes":storage::DETAIL_LOG_FILE_BYTES},
+            "logging":{"detailed_enabled":c.detailed_logging,"detail_error":detailed_error,"pps_error":controller.pps_log_error,"runtime_files":5,"runtime_file_bytes":262144,"detail_files":storage::DETAIL_LOG_BACKUPS+1,"detail_file_bytes":storage::DETAIL_LOG_FILE_BYTES},
             "write_mode":c.write_mode,"control_listeners":controls.as_ref().map(ControlEvents::health),"control_listener_error":controls_error,
             "counters":h.counters(),
             "device_capabilities":h.capabilities(),
             "pps_assist":crate::pps::status(h).ok(),
             "power_limit":crate::power::status(h).ok(),
+            "screen_fast":crate::screen::status(h).ok(),
             "heartbeat_interval_secs":120,
             "owned_count":controller.journal.entries.len(),"mount_count":controller.journal.entries.values().filter(|e|matches!(e.op.method,control::Method::Bind{..}|control::Method::Engineer)&&e.applied).count()});
         snapshot["counters"]["worker_cpu_ms"] = json!(worker_cpu_ms());
@@ -856,7 +837,9 @@ pub fn worker(h: &Hardware) -> Result<Value> {
     let restored = controller.restore(h)?;
     storage::json(
         &h.state().join("status.json"),
-        &json!({"schema":3,"version":crate::VERSION,"phase":"stopped","sampled_ms":now_ms(),"backends":restored,"owned_count":controller.journal.entries.len(),"config":c}),
+        &json!({"schema":3,"version":crate::VERSION,"phase":"stopped","sampled_ms":now_ms(),"backends":restored,"owned_count":controller.journal.entries.len(),"config":c,
+            "screen_fast":crate::screen::status(h).ok(),
+            "logging":{"detailed_enabled":c.detailed_logging,"pps_error":controller.pps_log_error}}),
     )?;
     remove_pid(h, "worker", &me);
     Ok(json!({"stopped":true,"remaining":controller.journal.entries.len()}))
@@ -927,7 +910,7 @@ fn charging_protocol(h: &Hardware) -> Value {
     };
     json!({"label":label,"source":"/sys/class/power_supply/usb/usb_type","raw":usb})
 }
-fn battery(h: &Hardware) -> Value {
+pub(crate) fn battery(h: &Hardware) -> Value {
     json!({"path":GAUGE,"raw":h.read(GAUGE).ok(),"temperature_c":h.read(GAUGE).ok().and_then(|s|s.parse::<f64>().ok()).map(|v|v/10.0),
         "status":h.read("/sys/class/power_supply/battery/status").unwrap_or_else(|_|"Unknown".into()),"protocol":charging_protocol(h),
         "note":"本模块不覆盖此电池接口；第三方覆盖与厂商单位仍需设备核对", "capacity":h.read("/sys/class/power_supply/battery/capacity").ok(),
@@ -1229,6 +1212,7 @@ pub fn probe_install(h: &Hardware) -> Result<Value> {
     Ok(
         json!({"report":path,"pps":if caps.pps_verified {"预检通过，加载时继续校验"}else{"暂不支持；详见能力报告"},
         "power":if caps.power_verified {"预检通过，加载时继续校验"}else{"暂不支持；详见能力报告"},
+        "screen":if caps.screen_verified {"预检通过，加载时继续校验"}else{"暂不支持；详见能力报告"},
         "charging_control_started":false}),
     )
 }

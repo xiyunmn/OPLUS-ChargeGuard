@@ -29,6 +29,7 @@ pub enum Method {
     Pps,
     Engineer,
     Power,
+    Screen,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Operation {
@@ -86,7 +87,10 @@ pub struct Controller {
     pub journal: Journal,
     pub rounds: u64,
     pub stable: u32,
+    pub pps_log_error: Option<String>,
     power: crate::power::Session,
+    screen: crate::screen::Session,
+    screen_log_state: Option<serde_json::Value>,
     persisted: RefCell<Option<Journal>>,
     persisted_stamp: RefCell<Option<[u64; 10]>>,
     statuses: BTreeMap<String, BackendStatus>,
@@ -127,6 +131,17 @@ pub fn plan(h: &Hardware, c: &Config, t: Temperatures, nodes: &[Node]) -> Vec<Op
         return vec![];
     }
     let mut ops = vec![];
+    if c.charge_screen_fast {
+        ops.push(write(
+            crate::screen::ID,
+            "screen",
+            crate::screen::DEVICE,
+            c.revision.to_string(),
+            None,
+            Method::Screen,
+            None,
+        ));
+    }
     if c.charge_power_limit_enabled {
         let mask = c
             .charge_power_limit_protocols
@@ -352,7 +367,10 @@ impl Controller {
             journal: j,
             rounds: 0,
             stable: 0,
+            pps_log_error: None,
             power: crate::power::Session::default(),
+            screen: crate::screen::Session::default(),
+            screen_log_state: None,
             persisted: RefCell::new(persisted),
             persisted_stamp: RefCell::new(Self::stamp(&path)),
             statuses: BTreeMap::new(),
@@ -451,6 +469,10 @@ impl Controller {
         let mut statuses = self.restore_ids(h, &obsolete);
         let mut changed = false;
         for op in ops.iter().filter(|op| due.contains(&op.id)) {
+            if op.method == Method::Screen {
+                statuses.push(self.reconcile_screen(h, op));
+                continue;
+            }
             if op.method == Method::Power {
                 statuses.push(self.reconcile_power(h, op));
                 continue;
@@ -531,7 +553,7 @@ impl Controller {
                         Method::Emulation | Method::Shell | Method::Bind { .. } => None,
                         Method::Write => h.read(&op.target).ok(),
                         Method::Pps => Some(crate::pps::original(h)?),
-                        Method::Engineer | Method::Power => unreachable!(),
+                        Method::Engineer | Method::Power | Method::Screen => unreachable!(),
                     };
                     if op.method == Method::Service
                         && !matches!(original.as_deref(), Some("running" | "stopped"))
@@ -664,7 +686,7 @@ impl Controller {
                 }
                 Ok("applied")
             })();
-            let (state, detail) = match result {
+            let (mut state, mut detail) = match result {
                 Ok(s) => (
                     s.to_owned(),
                     if s == "repair_wait" {
@@ -695,8 +717,28 @@ impl Controller {
                     ("retrying".into(), Some(e))
                 }
             };
+            let control_applied = state == "applied";
+            if op.method == Method::Pps && control_applied {
+                self.pps_log_error = crate::pps::capture_events(h).err();
+                match crate::pps::status(h) {
+                    Ok(helper) => {
+                        let (observed, mut message) = crate::pps::presentation(&helper);
+                        state = observed.into();
+                        if self.pps_log_error.is_some() {
+                            message.push_str("；诊断日志保存失败");
+                        }
+                        detail = Some(serde_json::json!({"message":message,"helper":helper,"log_error":self.pps_log_error}).to_string());
+                    }
+                    Err(error) => {
+                        state = "retrying".into();
+                        detail = Some(error);
+                    }
+                }
+            }
             if let Some(e) = self.journal.entries.get_mut(&op.id) {
-                e.applied = state == "applied";
+                // Ownership records whether the enabled flag was applied. The
+                // backend state separately describes actual diagnostic evidence.
+                e.applied = control_applied;
                 e.error = if state == "retrying" {
                     detail.clone()
                 } else {
@@ -808,6 +850,111 @@ impl Controller {
                 None
             };
         }
+        result
+    }
+    fn record_screen_status(&mut self, h: &Hardware, result: &BackendStatus) {
+        let helper = crate::screen::status(h).ok();
+        let detail = serde_json::json!({
+            "state":result.state,"requested":!result.desired.is_empty(),
+            "active":helper.as_ref().map(|s|s.active),
+            "original_led":helper.as_ref().map(|s|s.original_led),
+            "effective_led":helper.as_ref().map(|s|s.effective_led),
+            "error":helper.as_ref().map(|s|s.error),
+            "failure":self.journal.entries.get(&result.id).and_then(|e|e.error.as_deref())
+                .or_else(||helper.is_none().then_some(result.detail.as_deref()).flatten()),
+        });
+        if self.screen_log_state.as_ref() == Some(&detail) {
+            return;
+        }
+        match storage::log(
+            &h.state(),
+            &crate::runtime::event_record("screen_fast_state", detail.clone()),
+        ) {
+            Ok(()) => self.screen_log_state = Some(detail),
+            Err(error) => eprintln!("screen_fast_log:{error}"),
+        }
+    }
+    fn reconcile_screen(&mut self, h: &Hardware, op: &Operation) -> BackendStatus {
+        let mut result = BackendStatus {
+            id: op.id.clone(),
+            family: op.family.clone(),
+            target: op.target.clone(),
+            desired: op.desired.clone(),
+            state: "unsupported".into(),
+            detail: None,
+        };
+        let action = (|| -> Result<String> {
+            validate_operation(op)?;
+            let previous = self.journal.entries.get(&op.id).cloned();
+            if let Some(entry) = &previous {
+                if let Some(error) = &entry.error {
+                    // Failed activation is durable: recover first, then wait for
+                    // an explicit configuration revision before enabling again.
+                    self.screen.restore(h)?;
+                    if entry.op.desired == op.desired {
+                        result.detail = Some(error.clone());
+                        return Ok(crate::screen::failure_state(error).into());
+                    }
+                }
+            }
+            if !h.capabilities().screen_verified {
+                if previous.is_some() {
+                    self.screen.restore(h)?;
+                }
+                result.detail = h.capabilities().screen_probe_error;
+                return Ok("unsupported".into());
+            }
+            if previous.is_none() {
+                crate::screen::check_available(h)?;
+            }
+            if previous.as_ref().is_none_or(|e| e.op != *op) {
+                self.journal.entries.insert(
+                    op.id.clone(),
+                    Owned {
+                        op: op.clone(),
+                        original: Some("exclusive_shared_screen".into()),
+                        applied: false,
+                        error: None,
+                    },
+                );
+                if let Err(error) = self.save(h) {
+                    if let Some(old) = previous {
+                        self.journal.entries.insert(op.id.clone(), old);
+                    } else {
+                        self.journal.entries.remove(&op.id);
+                    }
+                    return Err(error);
+                }
+            }
+            // A replaced/removed ownership file must be restored before mutation.
+            self.save(h)?;
+            let state = self.screen.apply(h, &op.desired)?;
+            result.detail = Some(
+                serde_json::json!({"message":crate::screen::message(&state),"helper":state})
+                    .to_string(),
+            );
+            Ok(state.state)
+        })();
+        let failure = action.as_ref().err().cloned();
+        match action {
+            Ok(state) => result.state = state,
+            Err(error) => {
+                result.state = if crate::screen::status(h).is_ok_and(|s| s.pending) {
+                    "restore_pending"
+                } else {
+                    crate::screen::failure_state(&error)
+                }
+                .into();
+                result.detail = Some(error);
+            }
+        }
+        if let Some(entry) = self.journal.entries.get_mut(&op.id) {
+            entry.applied = result.state == "applied";
+            if let Some(error) = failure {
+                entry.error = Some(error);
+            }
+        }
+        self.record_screen_status(h, &result);
         result
     }
     fn save_engineer(&mut self, h: &Hardware, session: &crate::engineer::Session) -> Result<()> {
@@ -958,7 +1105,7 @@ impl Controller {
             .filter_map(|id| self.journal.entries.get(id).cloned())
             .collect::<Vec<_>>();
         entries.sort_by_key(|e| match e.op.method {
-            Method::Engineer | Method::Power => 0,
+            Method::Engineer | Method::Power | Method::Screen => 0,
             Method::Bind { .. } => 1,
             Method::Shell | Method::Emulation => 2,
             Method::Write | Method::Pps => 3,
@@ -976,8 +1123,11 @@ impl Controller {
                             self.save_engineer(h, s)
                         })?;
                     }
-                    Method::Pps => crate::pps::restore(h, e.original.as_deref())?,
+                    Method::Pps => {
+                        self.pps_log_error = crate::pps::restore(h, e.original.as_deref())?;
+                    }
                     Method::Power => self.power.restore(h)?,
+                    Method::Screen => self.screen.restore(h)?,
                     Method::Bind { source } => {
                         h.unbind(&op.target, source)?;
                         let _ = fs::remove_file(h.path(source));
@@ -1038,8 +1188,14 @@ impl Controller {
                 }
                 Ok(())
             })();
-            let detail = r.err();
+            let mut detail = r.err();
             let restored = detail.is_none();
+            if restored && op.method == Method::Pps {
+                detail = self
+                    .pps_log_error
+                    .as_ref()
+                    .map(|e| format!("pps_diagnostic_log_failed:{e}"));
+            }
             if restored {
                 self.journal.entries.remove(&op.id);
             } else if let Some(ent) = self.journal.entries.get_mut(&op.id) {
@@ -1077,6 +1233,11 @@ impl Controller {
                     status.state = "restore_pending".into();
                     status.detail = Some(format!("restore_journal_save:{error}"));
                 }
+            }
+        }
+        for status in &statuses {
+            if status.id == crate::screen::ID {
+                self.record_screen_status(h, status);
             }
         }
         statuses
@@ -1125,6 +1286,17 @@ fn validate_operation(op: &Operation) -> Result<()> {
             })
         });
     let ok = match &op.method {
+        Method::Screen => {
+            op.id == crate::screen::ID
+                && op.family == "screen"
+                && t == crate::screen::DEVICE
+                && op
+                    .desired
+                    .parse::<u64>()
+                    .is_ok_and(|r| r <= 9_000_000_000_000)
+                && op.reset.is_none()
+                && op.sensor_type.is_none()
+        }
         Method::Power => {
             op.id == crate::power::ID
                 && op.family == "power"
@@ -1169,5 +1341,87 @@ fn validate_operation(op: &Operation) -> Result<()> {
         Ok(())
     } else {
         Err("invalid_owned_operation".into())
+    }
+}
+
+#[cfg(test)]
+mod essential_tests {
+    use super::*;
+    use crate::runtime;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    struct Fixture(Hardware);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "cg-essential-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            let h = Hardware::fixture(root);
+            for (path, value) in [(BOUNCE, "1"), ("/proc/sys/kernel/random/boot_id", "test-boot")] {
+                let p = h.path(path);
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(p, value).unwrap();
+            }
+            h.fixture_capabilities(Default::default());
+            runtime::init(&h).unwrap();
+            Self(h)
+        }
+        fn operations(&self) -> Vec<Operation> {
+            let c = Config::default();
+            plan(&self.0, &c, c.select("Charging").1, &[])
+                .into_iter().filter(|op| op.id == "bouncing").collect()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0.root); }
+    }
+
+    #[test]
+    fn config_cas_does_not_discard_running_config() {
+        let f = Fixture::new();
+        let mut c = runtime::config(&f.0).unwrap();
+        c.cpu_temp_mc = 42000;
+        let payload = serde_json::to_vec(&serde_json::json!({"expected_revision":0,"config":c}))
+            .unwrap().iter().map(|b| format!("{b:02x}")).collect::<String>();
+        runtime::configure(&f.0, &payload).unwrap();
+        assert!(runtime::configure(&f.0, &payload).unwrap_err().contains("revision_conflict"));
+        assert_eq!(runtime::config(&f.0).unwrap().cpu_temp_mc, 42000);
+    }
+
+    #[test]
+    fn changed_journal_must_be_saved_before_new_device_writes() {
+        let f = Fixture::new();
+        let mut ctl = Controller::load(&f.0).unwrap();
+        let ops = f.operations();
+        ctl.reconcile(&f.0, &ops);
+        let path = f.0.state().join("ownership.json");
+        let saved = path.with_extension("saved");
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(f.0.path(BOUNCE), "1").unwrap();
+        let before = f.0.counters()["node_writes"].clone();
+        let result = ctl.reconcile(&f.0, &ops);
+        assert!(result.iter().any(|s| s.id == "bouncing" && s.state == "retrying"));
+        assert_eq!(f.0.read(BOUNCE).unwrap(), "1");
+        assert_eq!(f.0.counters()["node_writes"], before);
+        fs::remove_dir(&path).unwrap();
+        fs::rename(saved, path).unwrap();
+        ctl.reconcile(&f.0, &ops);
+        assert_eq!(f.0.read(BOUNCE).unwrap(), "0");
+    }
+
+    #[test]
+    fn failed_restore_keeps_ownership_until_recovered() {
+        let f = Fixture::new();
+        let mut ctl = Controller::load(&f.0).unwrap();
+        ctl.reconcile(&f.0, &f.operations());
+        fs::write(f.0.path(&format!("{BOUNCE}.fail")), "1").unwrap();
+        assert!(ctl.restore(&f.0).unwrap().iter().any(|s| s.state == "restore_pending"));
+        assert!(Controller::load(&f.0).unwrap().journal.entries.contains_key("bouncing"));
+        fs::remove_file(f.0.path(&format!("{BOUNCE}.fail"))).unwrap();
+        ctl.restore(&f.0).unwrap();
+        assert!(Controller::load(&f.0).unwrap().journal.entries.is_empty());
+        assert_eq!(f.0.read(BOUNCE).unwrap(), "1");
     }
 }

@@ -104,6 +104,7 @@
 <section id="page-charge" role="tabpanel" aria-labelledby="tab-charge" hidden>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_trigger">充电独立预设</label><p class="hint">连接充电器时自动应用。</p></div><input id="charge_trigger" class="switch" type="checkbox" checked></div></div>
   <div class="section-heading"><h2>充电策略</h2><span>按需开启</span></div>
+  <div class="card switch-card"><div class="setting-row"><div><label for="charge_screen_fast">亮屏快充</label><p class="hint">充电服务按息屏状态运行，减少亮屏附加限流；实际电流仍受适配器、温控和功率上限约束。</p><p class="hint" id="screen-fast-status" role="status">默认关闭 · 仅有线充电时生效</p></div><input id="charge_screen_fast" class="switch" type="checkbox" aria-describedby="screen-fast-status"></div></div>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_pps_stability">PPS 稳定性辅助</label><p class="hint">改为参考充电器输出电流，减少低电流错误退出PPS。</p><p class="hint" id="pps-assist-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_pps_stability" class="switch" type="checkbox" aria-describedby="pps-assist-status"></div></div>
   <div class="card switch-card"><div class="setting-row"><div><label for="charge_engineer_policy">售后充电分档</label><p class="hint">采用原厂售后充电分档，随温度调整；保留满电收尾。生效和恢复时会短暂重载电池服务。</p><p class="hint" id="engineer-policy-status" role="status">默认关闭 · 仅适用于已适配固件</p></div><input id="charge_engineer_policy" class="switch" type="checkbox" aria-describedby="engineer-policy-status"></div></div>
   <div class="card power-card" id="power-limit-card">

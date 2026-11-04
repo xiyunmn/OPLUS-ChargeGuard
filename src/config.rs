@@ -55,6 +55,8 @@ pub struct Config {
     #[serde(default)]
     pub charge_pps_stability: bool,
     #[serde(default)]
+    pub charge_screen_fast: bool,
+    #[serde(default)]
     pub charge_engineer_policy: bool,
     #[serde(default)]
     pub charge_power_limit_enabled: bool,
@@ -93,6 +95,7 @@ impl Default for Config {
             charge_trigger: true,
             charge_horae_enabled: true,
             charge_pps_stability: false,
+            charge_screen_fast: false,
             charge_engineer_policy: false,
             charge_power_limit_enabled: false,
             charge_power_limit_watts: power_watts(),
@@ -169,6 +172,10 @@ impl Config {
     }
     pub fn effective(&self, status: &str, smart_permits_horae: bool) -> Self {
         let mut c = self.clone();
+        c.charge_screen_fast = self.enabled
+            && self.charge_screen_fast
+            && self.charge_trigger
+            && status.trim() == "Charging";
         c.charge_power_limit_enabled = self.enabled
             && self.charge_power_limit_enabled
             && self.charge_trigger

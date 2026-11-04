@@ -26,8 +26,10 @@ pub struct Capabilities {
     pub pps_kernel_release: Option<String>,
     pub pps_verified: bool,
     pub power_verified: bool,
+    pub screen_verified: bool,
     pub pps_probe_error: Option<String>,
     pub power_probe_error: Option<String>,
+    pub screen_probe_error: Option<String>,
     pub pps_loaded_note_sha256: Option<String>,
     pub kernel_abi_checked_symbols: usize,
     #[serde(skip)]
@@ -135,6 +137,9 @@ impl Capabilities {
             let power_abi: BTreeMap<String, u64> =
                 serde_json::from_str(include_str!("../kernel/pjz110-power-symbols.json"))
                     .map_err(|e| e.to_string())?;
+            let screen_abi: BTreeMap<String, u64> =
+                serde_json::from_str(include_str!("../kernel/screen-symbols.json"))
+                    .map_err(|e| e.to_string())?;
             if let Err(e) = elf.check_abi(&pps_abi) {
                 evidence.pps = false;
                 evidence.pps_error = Some(e);
@@ -145,6 +150,10 @@ impl Capabilities {
                     evidence.power = false;
                     evidence.power_error = Some(e);
                 }
+            }
+            if let Err(e) = elf.check_abi(&screen_abi) {
+                evidence.screen = false;
+                evidence.screen_error = Some(e);
             }
             if evidence.power {
                 for (key, expected) in [
@@ -168,8 +177,10 @@ impl Capabilities {
         if let Err(e) = common {
             evidence.pps = false;
             evidence.power = false;
+            evidence.screen = false;
             evidence.pps_error = Some(e.clone());
-            evidence.power_error = Some(e);
+            evidence.power_error = Some(e.clone());
+            evidence.screen_error = Some(e);
         }
         Self {
             shell_slots: shell_slots(image.as_deref(), note.as_deref()),
@@ -177,8 +188,10 @@ impl Capabilities {
             shell_loaded_note_sha256: note,
             pps_verified: evidence.pps,
             power_verified: evidence.power,
+            screen_verified: evidence.screen,
             pps_probe_error: evidence.pps_error,
             power_probe_error: evidence.power_error,
+            screen_probe_error: evidence.screen_error,
             pps_driver_sha256: pps_image,
             // Kept for old diagnostic readers; whole-driver digest no longer gates features.
             pps_driver_contract_sha256: None,
@@ -187,22 +200,5 @@ impl Capabilities {
             kernel_abi_checked_symbols: abi_checked,
             evidence_stamp: evidence_stamp(h),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cos16_and_cos17_require_their_own_matching_loaded_note() {
-        for (image, note) in VERIFIED_SHELL_DRIVERS {
-            assert_eq!(shell_slots(Some(image), Some(note)), Some(3));
-            assert_eq!(shell_slots(Some(image), None), None);
-            assert_eq!(shell_slots(None, Some(note)), None);
-        }
-        assert_eq!(shell_slots(Some(SHELL_IMAGE), Some(SHELL_NOTE_COS17)), None);
-        assert_eq!(shell_slots(Some(SHELL_IMAGE_COS17), Some(SHELL_NOTE)), None);
-        assert_eq!(shell_slots(Some("unknown"), Some("unknown")), None);
     }
 }

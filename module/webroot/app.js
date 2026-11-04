@@ -4,7 +4,7 @@ const $=id=>document.getElementById(id);
 const pages={overview:document.title,global:'全局温控',charge:'充电预设',preferences:'设置'};
 const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge_batt_temp_mc','charge_cpu_temp_mc','charge_gpu_temp_mc','charge_ddr_temp_mc'];
 const counts=new Intl.NumberFormat('en-US');
-const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复待处理',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压'};
+const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复待处理',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压',waiting_charge:'等待有线充电',data_error:'状态异常',conflict:'控制冲突',retired:'辅助已停止',pps_waiting:'等待 PPS',pps_armed:'已设置，暂无辅助证据',pps_used:'已参与电流判断',pps_data_unavailable:'原厂停用数据通道',pps_exited:'已退出 PPS',pps_diagnostic_unavailable:'诊断不可用',pps_off:'辅助未启用',pps_retired:'辅助已停止'};
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
@@ -66,7 +66,7 @@ function labels(){
 function populate(next){
   config=next;
   for(const key of tempKeys)$(key).value=next[key]/1000;
-  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])$(key).checked=!!next[key];
+  for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_screen_fast','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])$(key).checked=!!next[key];
   for(const radio of document.querySelectorAll('[name=charge_horae_mode]'))radio.checked=radio.value===next.charge_horae_mode;
   for(const radio of document.querySelectorAll('[name=write_mode]'))radio.checked=radio.value===(next.write_mode||'event');
   $('charge_power_limit_watts').value=next.charge_power_limit_watts??50;
@@ -162,7 +162,17 @@ function render(data){
     power?.state==='waiting_protocol'?'当前协议未选中或尚未进入快充':
     ['data_error','vote_rejected','conflict','retired'].includes(power?.state)?'限流尚未生效，请查看后端详情':
     powerOp?.state==='retrying'?'辅助模块未就绪，请查看后端详情':'等待有效电压与限流确认');
-  const pps=ops.find(op=>op.id==='pps_status_assist'),assist=s.pps_assist;
+  const screenOp=ops.find(op=>op.id==='charge_screen_fast'),screen=s.screen_fast;
+  setText($('screen-fast-status'),screenOp?.state==='restore_pending'||screen?.pending?'恢复未完成，请查看后端详情':
+    !fresh?(active?'等待最新运行状态':'核心已停止，功能未启用'):
+    config?.revision>s.config?.revision?'新设置已保存，等待后台确认':
+    !s.config?.charge_screen_fast?'已关闭':
+    !s.config?.enabled||!s.config?.charge_trigger?'等待模块和充电预设启用':
+    screenOp?.state==='unsupported'?'当前共享充电接口未适配，未启用':
+    ['data_error','conflict','retired'].includes(screenOp?.state)?'本次启用未完成，请查看后端详情；重新保存可重试':
+    s.charge_status!=='Charging'?'等待有线充电':
+    screenInfo(screenOp)?.message||'等待共享充电状态确认');
+  const pps=ops.find(op=>op.id==='pps_status_assist');
   const engineer=ops.find(op=>op.id==='engineer_charge_policy');
   setText($('engineer-policy-status'),!fresh?'等待最新运行状态':
     config?.revision>s.config?.revision?'新设置已保存，等待后台确认应用或恢复':
@@ -181,12 +191,11 @@ function render(data){
     !s.config?.charge_pps_stability?'已关闭':
     !s.device_capabilities?.pps_verified?'当前内核或充电固件未适配，未启用':
     s.profile!=='charging'||s.charge_status!=='Charging'?'等待充电独立预设生效':
-    assist?.retiring?'驱动已退出，辅助功能已停止':
-    assist?.enabled&&assist?.applied?'辅助选项已应用；协议仍由原厂管理':
-    assist?.enabled?'已准备，等待 PPS 充电流程':'尚未启用');
+    ppsInfo(pps)?.message||'诊断信息不可用，请查看后端详情');
   setText($('backend-tab-count'),count(ops.length));setText(document.querySelector('[data-backend-filter=all] .filter-count'),count(ops.length));
   setText($('log-detail-state'),s.logging?.detailed_enabled?'详细日志已开启':'详细日志关闭');
-  $('logging-error').hidden=!s.logging?.detail_error;setText($('logging-error'),s.logging?.detail_error?'详细日志记录失败：'+s.logging.detail_error:'');
+  const logError=s.logging?.detail_error||s.logging?.pps_error;
+  $('logging-error').hidden=!logError;setText($('logging-error'),logError?(s.logging?.detail_error?'详细日志记录失败：':'PPS 诊断记录失败：')+logError:'');
   if(currentPage==='preferences')renderBackends(data);
   if(!fresh){clearTelemetry();if(data.last_worker_error)message('核心启动记录：'+data.last_worker_error,true);return;}
   const temperature=number(s.battery?.temperature_c),capacity=number(s.battery?.capacity);
@@ -223,12 +232,21 @@ function backendGroup(op){
   if(String(op.target).endsWith('/emul_temp'))return ['emul_temp','emul_temp','shell'];
   if(String(op.target).startsWith('/proc/game_opt/'))return ['game_opt','game_opt','frequency'];
   if(['omrg','migt'].includes(op.id))return [op.id,op.id.toUpperCase(),'frequency'];
-  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务',pps:'PPS 稳定性辅助',engineer:'售后充电分档',power:'最大充电功率'};
+  const names={cpu:'CPU 温度映射',gpu:'GPU 温度映射',ddr:'DDR 温度映射',services:'系统服务',pps:'PPS 稳定性辅助',engineer:'售后充电分档',power:'最大充电功率',screen:'亮屏快充'};
   if(names[op.family])return [op.family,names[op.family],op.family];
   return [op.id||op.target,op.id||op.target||'其他后端',op.family||'other'];
 }
+function ppsInfo(op){
+  if(op?.id!=='pps_status_assist'||typeof op.detail!=='string')return null;
+  try{const info=JSON.parse(op.detail);return typeof info?.message==='string'?info:null;}catch(_){return null;}
+}
 function stateText(op){return op.state==='applied'&&['write_accepted_no_readback','write_accepted_aggregate_readback','write_accepted_readback_masked_by_switch'].includes(op.detail)?'已写入':stateNames[op.state]||op.state||'未知';}
-function stateClass(ops){return ops.some(o=>['retrying','restore_pending','repair_wait','unverified'].includes(o.state))?'warn':ops.every(o=>o.state==='applied')?'good':'';}
+function screenInfo(op){
+  if(op?.id!=='charge_screen_fast'||typeof op.detail!=='string')return null;
+  try{const info=JSON.parse(op.detail);return info&&typeof info.message==='string'&&info.helper?info:null;}catch{return null;}
+}
+function screenValue(value){return value===0?'息屏':value===1?'亮屏':'未知';}
+function stateClass(ops){return ops.some(o=>['retrying','restore_pending','repair_wait','unverified','pps_diagnostic_unavailable','pps_data_unavailable','pps_exited','pps_retired','data_error','conflict','retired'].includes(o.state)||ppsInfo(o)?.log_error)?'warn':ops.every(o=>['applied','pps_used'].includes(o.state))?'good':'';}
 function groupMode(group){
   if(group.items.every(o=>o.state==='restored'))return '已恢复';
   if(group.items.every(o=>!o.maintenance_mode))return group.items.some(o=>o.state==='restore_pending')?'等待恢复':'—';
@@ -246,12 +264,24 @@ function createBackendNode(){
 function paintBackendNode(record,op,multiple){
   record.heading.hidden=!multiple;setText(record.title,String(op.target||op.id||'未知接口').split('/').slice(-2).join('/'));
   setText(record.state,stateText(op));record.state.className='backend-state '+stateClass([op]);setText(record.path,op.target||op.id);
-  const pairs=[
+  const screen=screenInfo(op);
+  const pairs=screen?[]:[
     [op.can_verify?'目标 / 回读':'目标值',op.can_verify?String(op.desired??'—')+' / '+String(op.observed_after??'—'):String(op.desired??'—')],
     ['回读',op.can_verify===false?'无法完整核验':{matched:'符合目标',repaired:'修复后已核验',mismatched:'与目标不符',unreadable:'无法读取',not_checked:'未核验'}[op.verification]||'—'],
     ['最近处理',uptime(op.last_maintenance_ms)],
     ['本次处理',typeof op.write_performed==='boolean'?(op.write_performed?'已执行写入':'未执行写入'):'—']
   ];
+  if(screen){
+    const h=screen.helper;
+    pairs.push(['原始屏幕',screenValue(h.original_led)],['充电服务采用',screenValue(h.effective_led)],['覆盖状态',h.active?'生效中':'未覆盖'],['共享状态事件',count(h.observations)+' 次'],['主动状态发布',count(h.publications)+' 次'],['最近错误码',String(h.error??'—')],['最近处理',uptime(op.last_maintenance_ms)]);
+  }
+  const pps=ppsInfo(op),d=pps?.helper?.diagnostics;
+  if(pps){
+    pairs.push(['工作回调命中',count(pps.helper.observations)]);
+    if(d){
+      pairs.push(['查询 / 返回成功 / 失败',count(d.queries)+' / '+count(d.successes)+' / '+count(d.failures)],['实际参与判断',count(d.uses)+' 次'],['最近查询（开机后）',d.query_ms?uptime(d.query_ms):'尚无查询'],['最近返回码',d.queries?String(d.rc):'—'],['最近原始返回值',d.raw==null?'—':'0x'+Number(d.raw).toString(16)],['退出时生效票',d.exit_voter||'未知']);
+    }
+  }
   if(Number.isFinite(op.retry_after_ms))pairs.push(['修复截止（开机后）',uptime(op.retry_after_ms)]);
   const fields=[];
   for(const [key,value] of pairs){let field=record.pairs.get(key);if(!field){const el=element('div'),dt=element('dt',key),dd=element('dd');el.append(dt,dd);field={el,dd};record.pairs.set(key,field);}setText(field.dd,value);field.dd.classList.toggle('good',key==='回读'&&['matched','repaired'].includes(op.verification));fields.push(field.el);}
@@ -261,7 +291,8 @@ function paintBackendNode(record,op,multiple){
   const source={property_wait:'服务状态通知',node_inotify:'inotify','mount_poll+inotify':'挂载与文件通知','thermal_tracepoint+thermal_netlink+inotify':'thermal / netlink / inotify'}[op.event_source]||op.event_source;
   const reason=[source,op.maintenance_reason].filter(Boolean).join(' · ');setText(record.reason,reason);record.reason.hidden=!reason;
   const detail={node_repair_rate_limited:'已检测到漂移；到修复截止时间会自动再次核验。',shell_driver_unverified:'尚未匹配经过验证的驱动身份，shell-temp 暂停写入。',restore_shell_capability_unverified:'原驱动能力未确认，恢复记录保留，暂不写入恢复值。',write_accepted_aggregate_readback:'槽位已验证有效，写入已接受；回读仅是所有槽位的最大值，不能逐槽核验。',write_accepted_no_readback:'接口写入已完成；该接口不提供可比对的回读。',write_accepted_readback_masked_by_switch:'写入已完成；显示值受禁限开关影响，不能验证内部请求。'}[op.detail]||op.detail;
-  setText(record.detail,detail);record.detail.hidden=!detail;setText(record.pre,JSON.stringify(op,null,2));
+  const readable=screen?screen.message:pps?pps.message+(pps.helper.diagnostic_error?' · '+pps.helper.diagnostic_error:''):(op.detail?.startsWith('pps_diagnostic_log_failed:')?'充电控制已恢复；PPS诊断日志保存失败：'+op.detail.slice('pps_diagnostic_log_failed:'.length):detail);
+  setText(record.detail,readable);record.detail.hidden=!readable;setText(record.pre,JSON.stringify(op,null,2));
 }
 function renderBackends(data){
   if(!diagnosticExpanded||diagnosticTab!=='backends'||currentPage!=='preferences')return;
@@ -289,12 +320,22 @@ function renderBackends(data){
   syncChildren(root,children.length?children:[element('p',ops.length?'暂无匹配后端':s.profile==='idle'?'当前处于待机，未启用控制后端。':s.phase==='stopped'?'核心已停止，目前没有待恢复的操作。':'尚无后端记录，启动核心后会显示。','empty')]);root.scrollTop=scroll;
 }
 
-const logNames={detailed_logging_changed:'详细日志设置',cooling_listener_changed:'Cooling 监听状态',maintenance_mode_changed:'维护模式更新',horae_camera_restore:'相机优先恢复 Horae',charge_listener:'充电事件监听',charge_changed:'充电状态变化',maintenance:'后端维护',profile_changed:'预设切换',config_changed:'设置已保存',camera_state:'智能 Horae',worker_exit:'核心进程退出',watchdog_wait:'等待自动重启',spawn_failed:'启动失败',worker_stop_timeout:'停止超时',status_write_failed:'状态记录失败'};
-function isError(e){return /failed|timeout|_error$/.test(e.event||'')||Number(e.detail?.failures)>0||!!e.detail?.error||(e.event==='worker_exit'&&!e.detail?.requested);}
+const logNames={screen_fast_state:'亮屏快充状态',pps_diagnostic:'PPS 辅助事件',pps_diagnostic_gap:'PPS 诊断记录缺口',detailed_logging_changed:'详细日志设置',cooling_listener_changed:'Cooling 监听状态',maintenance_mode_changed:'维护模式更新',horae_camera_restore:'相机优先恢复 Horae',charge_listener:'充电事件监听',charge_changed:'充电状态变化',maintenance:'后端维护',profile_changed:'预设切换',config_changed:'设置已保存',camera_state:'智能 Horae',worker_exit:'核心进程退出',watchdog_wait:'等待自动重启',spawn_failed:'启动失败',worker_stop_timeout:'停止超时',status_write_failed:'状态记录失败'};
+function isError(e){return e.event==='pps_diagnostic_gap'||e.event==='pps_diagnostic'&&(e.detail?.kind==='query'&&e.detail?.result<0||e.detail?.kind==='support'&&e.detail?.result===0||e.detail?.kind==='hard_reset')||/failed|timeout|_error$/.test(e.event||'')||e.event==='screen_fast_state'&&['data_error','conflict','restore_pending','unsupported','retired'].includes(e.detail?.state)||Number(e.detail?.failures)>0||!!e.detail?.error||(e.event==='worker_exit'&&!e.detail?.requested);}
 function logTone(e){return isError(e)?'error':/camera|horae/.test(e.event||'')?'camera':/cooling/.test(e.event||'')?'cooling':'config';}
 function logSummary(e){
-  const d=e.detail;if(typeof d==='string')return d;if(!d||typeof d!=='object')return '查看完整记录';if(d.error)return String(d.error);
+  const d=e.detail;if(typeof d==='string')return d;if(!d||typeof d!=='object')return '查看完整记录';if(d.error&&e.event!=='screen_fast_state')return String(d.error);
   switch(e.event){
+    case 'screen_fast_state':return (stateNames[d.state]||d.state)+' · 原始'+screenValue(d.original_led)+' → 充电判断'+screenValue(d.effective_led)+(d.error?' · 错误 '+d.error:'');
+    case 'pps_diagnostic_gap':return '缺失 '+count(d.lost)+' 条未读事件；本次记录不能还原完整顺序';
+    case 'pps_diagnostic':{
+      const labels={bound:'已进入原厂 PPS 流程',query:'PPS Status 查询',support:d.result?'原厂允许源端数据':'原厂停用源端数据',used:'辅助电流实际参与判断',charging:d.result?'PPS 充电开始':'PPS 充电停止',disable_vote:'禁止票变化',not_allow_vote:'准入票变化',soft_exit:'PPS 软退出',force_exit:'PPS 强制退出',hard_reset:'ADSP 报告 Hard Reset',enabled:d.result?'辅助开关已设置':'辅助开关已关闭',retiring:'原厂驱动退出'};
+      let text=labels[d.kind]||d.kind||'PPS 状态变化';
+      if(d.kind==='query')text+=' · '+({startup:'启动阶段',steady:'持续充电'}[d.query_phase]||'阶段未知')+' · 返回 '+d.result;
+      if(d.effective_voter&&!['none','unknown'].includes(d.effective_voter))text+=' · '+d.effective_voter;
+      if(['soft_exit','force_exit'].includes(d.kind)&&['none','unknown'].includes(d.effective_voter))text+=' · 原因未知';
+      return text+' · 开机后 '+uptime(d.occurred_boottime_ms);
+    }
     case 'detailed_logging_changed':return d.enabled?'已开启详细日志 · 按大小轮转':'已关闭详细日志';
     case 'cooling_listener_changed':return d.transport?.ready?'监听就绪 · 事件驱动维护':d.transport?.error||'监听尚未就绪 · 局部周期核验';
     case 'maintenance_mode_changed':return '纯事件 '+count(d.event_backends)+' 项 · 周期 '+count(d.periodic_backends)+' 项 · 休眠 '+count(d.dormant_backends)+' 项';
@@ -320,8 +361,11 @@ function logTime(entry){
   time.setAttribute('aria-label',time.title);time.append(element('span',day),element('strong',clock));return time;
 }
 function renderLogs(){
-  const list=$('log-list'),scroll=list.scrollTop,occurrences=new Map(),children=[],wanted=new Set();
+  const list=$('log-list'),scroll=list.scrollTop,occurrences=new Map(),children=[],wanted=new Set(),ppsSeen=new Set();
   for(const e of logEntries.slice().reverse()){
+    // A crash between log append and cursor save may replay the same kernel event.
+    const id=e.event?.startsWith('pps_diagnostic')?e.detail?.event_id:null;
+    if(id){if(ppsSeen.has(id))continue;ppsSeen.add(id);}
     const match=logFilter==='all'||logFilter==='error'&&isError(e)||logFilter==='camera'&&['camera_state','horae_camera_restore'].includes(e.event)||logFilter==='config'&&['config_changed','profile_changed'].includes(e.event);
     const encoded=JSON.stringify(e),ordinal=occurrences.get(encoded)||0;occurrences.set(encoded,ordinal+1);const key=encoded+'#'+ordinal;wanted.add(key);
     if(!match)continue;
@@ -380,7 +424,7 @@ async function save(event){
     next.charge_power_limit_watts=Number($('charge_power_limit_watts').value);
     next.charge_power_limit_protocols=Array.from(document.querySelectorAll('[name=charge_power_limit_protocols]:checked'),node=>node.value);
     if($('charge_power_limit_enabled').checked&&!next.charge_power_limit_protocols.length)throw new Error('请至少选择一个限功率协议');
-    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])next[key]=$(key).checked;
+    for(const key of ['global_enabled','horae_stop','charge_trigger','charge_horae_enabled','charge_pps_stability','charge_screen_fast','charge_engineer_policy','charge_power_limit_enabled','detailed_logging'])next[key]=$(key).checked;
     next.charge_horae_mode=document.querySelector('[name=charge_horae_mode]:checked').value;next.write_mode=document.querySelector('[name=write_mode]:checked').value;
     const result=await CG.call('configure-hex',CG.hex({expected_revision:config.revision,config:next}));populate(result.config);message('设置已保存',false,'config');
   }catch(error){message(error.message.includes('revision_conflict')?'配置已在其他位置更新，请撤销更改后重新编辑。':error.message,true);}
