@@ -49,7 +49,7 @@ function present(){
   header();$('statistics-tabs').hidden=view==='settings'||view==='detail';
   $('statistics-current').hidden=!['current','detail'].includes(view);$('statistics-history').hidden=view!=='history';$('statistics-record-settings').hidden=view!=='settings';
   for(const key of ['current','history']){const button=$('statistics-tab-'+key);button.setAttribute('aria-selected',String(view===key));button.tabIndex=view===key?0:-1;}
-  $('statistics-chart-period').hidden=view==='detail';$('statistics-window').hidden=view!=='detail';$('statistics-window-reset').hidden=view!=='detail';$('statistics-detail-actions').hidden=view!=='detail';
+  $('statistics-chart-period').hidden=view==='detail';$('statistics-window').hidden=view!=='detail';$('statistics-chart-toolbar').hidden=view==='detail';$('statistics-detail-actions').hidden=view!=='detail';
   renderSession();if(view==='history')renderHistory();if(view==='settings')renderStorage();
 }
 function setView(next,push=true){
@@ -208,17 +208,25 @@ function timeTicks(start,end,width,fontSize){
   ticks.push(end);return ticks;
 }
 function renderChart(id,points,key,bounds,limits,geometry){
-  const svg=$(id),width=svg.clientWidth,height=svg.clientHeight,box={left:geometry.left,right:width-12,top:8,bottom:height-26},[start,end]=bounds,{low,high,ticks}=limits;
+  const svg=$(id),width=svg.clientWidth,height=svg.clientHeight,box={left:geometry.left,right:width-12,top:8,bottom:height-8},[start,end]=bounds,{low,high,ticks}=limits;
   svg.setAttribute('viewBox','0 0 '+width+' '+height);svg.setAttribute('aria-label',metrics[key].label+'曲线');
   let markup='';
   for(const value of ticks){const y=box.bottom-(value-low)/(high-low)*(box.bottom-box.top);markup+='<line class="stats-grid" x1="'+box.left+'" x2="'+box.right+'" y1="'+y+'" y2="'+y+'"/><text class="stats-axis" text-anchor="end" x="'+(box.left-8)+'" y="'+y+'" dominant-baseline="middle">'+axisValue(value)+'</text>';}
-  for(const t of timeTicks(start,end,box.right-box.left,geometry.axisFont)){const x=box.left+(t-start)/(end-start)*(box.right-box.left);markup+='<text class="stats-axis" text-anchor="'+(t===start?'start':t===end?'end':'middle')+'" x="'+x+'" y="'+(height-5)+'">'+elapsed(t)+'</text>';}
+
   let previous=null;for(const point of points){if(previous&&point.gap_before){const x1=box.left+(previous.elapsed_ms-start)/(end-start)*(box.right-box.left),x2=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left);markup+='<rect class="stats-gap" x="'+x1+'" y="'+box.top+'" width="'+Math.max(0,x2-x1)+'" height="'+(box.bottom-box.top)+'"/>';}previous=point;}
   const path=pathFor(points,key,bounds,[low,high],box,metrics[key].scale);markup+='<path class="stats-line" d="'+path+'"/>';
   for(let i=0;i<points.length;i++){const point=points[i],value=number(point[key]),before=points[i-1],after=points[i+1];if(value!=null&&(!before||point.gap_before||number(before[key])==null)&&(!after||after.gap_before||number(after[key])==null)){const x=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left),y=box.bottom-(value/metrics[key].scale-low)/(high-low)*(box.bottom-box.top);markup+='<circle class="stats-point" cx="'+x+'" cy="'+y+'" r="2.5"/>';}}
   if(!path)markup+='<text class="stats-missing" x="'+((box.left+box.right)/2)+'" y="'+((box.top+box.bottom)/2)+'" text-anchor="middle">暂无有效读数</text>';
   svg.innerHTML=markup+'<g id="'+id+'-cursor" pointer-events="none"></g>';
   return {id,key,box,limits};
+}
+function renderTimeRuler(){
+  const svg=$('statistics-time-ruler'),row=$('statistics-cursor-row'),{bounds,plots,fontSize}=chartLayout,[start,end]=bounds,box=plots[0].box,width=svg.clientWidth,height=svg.clientHeight,y=height-23;
+  svg.setAttribute('viewBox','0 0 '+width+' '+height);row.setAttribute('aria-valuemin',String(start));row.setAttribute('aria-valuemax',String(end));
+  let markup='<path class="stats-ruler-line" d="M'+box.left+' '+y+'H'+box.right+'"/>';
+  for(let i=0;i<=24;i++){const x=box.left+(box.right-box.left)*i/24;markup+='<path class="stats-ruler-line" d="M'+x+' '+(y-(i%6===0?4:2))+'v'+(i%6===0?8:4)+'"/>';}
+  for(const t of timeTicks(start,end,box.right-box.left,fontSize*.5)){const x=box.left+(t-start)/(end-start)*(box.right-box.left);markup+='<text class="stats-ruler-label" text-anchor="'+(t===start?'start':t===end?'end':'middle')+'" x="'+x+'" y="'+(height-5)+'">'+elapsed(t)+'</text>';}
+  svg.innerHTML=markup;
 }
 function cursorPoint(points,bounds){
   if(!points.length)return null;
@@ -232,6 +240,7 @@ function cursorPoint(points,bounds){
 function renderCursor(){
   if(!chartLayout)return;
   const {points,bounds,plots,fontSize}=chartLayout,[start,end]=bounds,selected=cursorPoint(points,bounds);
+  const row=$('statistics-cursor-row');row.setAttribute('aria-valuenow',String(selected?.elapsed_ms??start));row.setAttribute('aria-valuetext',selected?elapsed(selected.elapsed_ms)+(selected.gap?'，无采样':''):'尚未选择时间');
   const reading=$('statistics-cursor');reading.hidden=!selected;$('statistics-cursor-row').classList.toggle('has-cursor',!!selected);$('statistics-cursor-hint').hidden=!!selected;
   for(const {id,key,box,limits} of plots){const layer=$(id+'-cursor'),valueId=id.replace('-chart','-value');if(!selected){text(valueId,'—');layer.replaceChildren();continue;}
     const x=box.left+(selected.elapsed_ms-start)/(end-start)*(box.right-box.left),info=metrics[key],raw=number(selected[key]),value=raw==null?null:raw/info.scale;
@@ -262,7 +271,7 @@ function renderWindow(bounds){
   for(const id of ['statistics-window-start','statistics-window-end'])$(id).max=String(max);
   $('statistics-window-start').value=String(start);$('statistics-window-end').value=String(end);
   for(const [id,value] of [['statistics-window-start',start],['statistics-window-end',end]])$(id).setAttribute('aria-valuetext',elapsed(value));
-  text('statistics-window-start-label',elapsed(start));text('statistics-window-end-label',elapsed(end));$('statistics-window-selection').style.left=start/max*100+'%';$('statistics-window-selection').style.width=(end-start)/max*100+'%';$('statistics-window-reset').disabled=start===0&&end===max;
+  text('statistics-window-start-label',elapsed(start));text('statistics-window-end-label',elapsed(end));$('statistics-window-selection').style.left=start/max*100+'%';$('statistics-window-selection').style.width=(end-start)/max*100+'%';
 }
 function renderCharts(){
   const data=currentData(),summary=currentSummary(),upper=$('statistics-upper-chart');if(!summary||!upper.clientWidth)return;
@@ -270,7 +279,7 @@ function renderCharts(){
   const left=Math.max(34,...limits.flatMap(limit=>limit.ticks.map(value=>textWidth(axisValue(value),axisFont)+10)));
   $('statistics-chart-card').style.setProperty('--plot-left',Math.ceil(left)+'px');
   const plots=['upper','lower'].map((position,index)=>{const key=chartMetrics[index],info=metrics[key],choices=$('statistics-'+position+'-metric'),svg=$('statistics-'+position+'-chart');for(const button of choices.children)button.setAttribute('aria-pressed',String(button.dataset.metric===key));for(const node of [choices.parentElement,svg.parentElement])node.style.setProperty('--chart-tone','var('+info.tone+')');choices.parentElement.style.setProperty('--metric-soft','var('+(key==='net_power_w'?'--soft':info.tone+'-bg')+')');text('statistics-'+position+'-label',info.label);text('statistics-'+position+'-unit',info.unit);return renderChart(svg.id,points,key,bounds,limits[index],{left:Math.ceil(left),axisFont});});
-  chartLayout={points,bounds,plots,fontSize};renderProtocols(points,bounds,fontSize);renderWindow(bounds);renderCursor();
+  chartLayout={points,bounds,plots,fontSize};renderTimeRuler();renderProtocols(points,bounds,fontSize);renderWindow(bounds);renderCursor();
   text('statistics-chart-note',!data?'正在读取曲线…':!points.length?'此时间范围暂无采样':'按实际时间绘制 · 缺失处断开');
 }
 function sparkline(summary){
@@ -385,7 +394,7 @@ function chooseCursor(clientX){
 }
 const touch=$('statistics-chart-touch');let chartPointer=null;
 touch.addEventListener('pointerdown',event=>{
-  if(event.button!==0||!event.target.closest('.stats-chart'))return;
+  if(event.button!==0||event.target.closest('button,input,select,a'))return;
   chartPointer={id:event.pointerId,x:event.clientX,y:event.clientY,mode:event.pointerType==='touch'?null:'inspect'};touch.setPointerCapture(event.pointerId);
   if(chartPointer.mode){event.preventDefault();chooseCursor(event.clientX);}
 });
@@ -435,7 +444,6 @@ for(const input of [$('statistics-window-start'),$('statistics-window-end')]){
     adjustWindow(input.id,event.key==='Home'?0:event.key==='End'?chartEnd():Number(input.value)+delta);
   });input.addEventListener('keyup',commitWindow);
 }
-$('statistics-window-reset').onclick=()=>{windowStart=0;windowEnd=null;windowGeneration++;cursorElapsed=null;windowPreview=true;windowEditing=true;commitWindow();};
 function saveMetrics(){try{localStorage.setItem(metricPreference,JSON.stringify(chartMetrics));}catch(_){}renderCharts();}
 const metricNames={net_power_w:'功率',current_ma:'电流',voltage_mv:'电压',soc:'电量',temp_c:'温度'};
 for(const [index,position] of ['upper','lower'].entries()){const choices=$('statistics-'+position+'-metric');for(const [key,label] of Object.entries(metricNames)){const button=el('button',label);button.type='button';button.dataset.metric=key;button.setAttribute('aria-pressed',String(chartMetrics[index]===key));button.onclick=()=>{if(chartMetrics[index]===key)return;chartMetrics[index]=key;saveMetrics();};choices.append(button);}}

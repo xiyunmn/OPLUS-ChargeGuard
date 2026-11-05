@@ -354,20 +354,51 @@ impl Store {
                 .transpose()
                 .ok()
                 .flatten();
-            if indexed.is_none() || (active.exists() && store.active().is_err()) {
-                Some((snapshot_stamp(&index)?, snapshot_stamp(&active)?, indexed))
+            let current = store.active();
+            let valid_index = indexed.is_some();
+            let mut known = indexed.unwrap_or_default();
+            if let Ok(Some(current)) = &current {
+                if !known.iter().any(|s| s.summary.id == current.summary.id) {
+                    known.push(current.clone());
+                }
+            }
+            let paths = store.orphan_paths(&known)?;
+            if !valid_index || current.is_err() || !paths.is_empty() {
+                let stamps = paths
+                    .iter()
+                    .map(|path| snapshot_stamp(path))
+                    .collect::<Result<Vec<_>>>()?;
+                Some((
+                    snapshot_stamp(&index)?,
+                    snapshot_stamp(&active)?,
+                    valid_index,
+                    known,
+                    paths,
+                    stamps,
+                ))
             } else {
                 None
             }
         };
-        if let Some((index_stamp, active_stamp, indexed)) = recovery {
+        if let Some((index_stamp, active_stamp, valid_index, known, paths, stamps)) = recovery {
             // Recovery can scan long raw sessions; never hold the writer lock
             // while reading them. Do not publish over a concurrent snapshot.
-            let recovered = store.recover(indexed.as_deref())?;
+            let recovered = store.recover(&paths, &known, valid_index)?;
             let _lock = store.lock()?;
             let index = store.dir.join("index.json");
             let active = store.dir.join("active.json");
             if (index_stamp, active_stamp) != (snapshot_stamp(&index)?, snapshot_stamp(&active)?) {
+                return Err("statistics_changed_during_recovery".into());
+            }
+            // A first append can change raw data before active.json exists.
+            // Check only unknown files; indexed history needs no raw reads.
+            if paths != store.orphan_paths(&known)?
+                || stamps
+                    != paths
+                        .iter()
+                        .map(|path| snapshot_stamp(path))
+                        .collect::<Result<Vec<_>>>()?
+            {
                 return Err("statistics_changed_during_recovery".into());
             }
             let mut pending = recovered
@@ -387,10 +418,7 @@ impl Store {
                 regular(&active)?;
                 fs::remove_file(&active).map_err(|e| e.to_string())?;
             }
-        }
-        {
-            let _lock = store.lock()?;
-            store.remove_orphans(&store.load()?)?;
+            store.remove_orphans(&recovered)?;
         }
         Ok(store)
     }
@@ -428,18 +456,36 @@ impl Store {
         }
         Ok(sessions)
     }
-    fn recover(&self, indexed: Option<&[Session]>) -> Result<Vec<Session>> {
-        // A valid index defines closed-session membership after deletion. Only
-        // recover every raw session when that index itself is unavailable.
-        let mut sessions = Vec::new();
+    fn orphan_paths(&self, sessions: &[Session]) -> Result<Vec<PathBuf>> {
+        let known = sessions
+            .iter()
+            .map(|s| s.summary.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut paths = Vec::new();
         for entry in fs::read_dir(self.dir.join("sessions")).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let Some(id) = name.strip_suffix(".jsonl") else {
                 continue;
             };
-            let path = self.path(id)?;
-            let file = open_regular(&path)?;
+            if !known.contains(id) {
+                paths.push(self.path(id)?);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+    fn recover(
+        &self,
+        paths: &[PathBuf],
+        known: &[Session],
+        valid_index: bool,
+    ) -> Result<Vec<Session>> {
+        // Existing snapshots stay authoritative. A valid index excludes closed
+        // deletion orphans, but an unfinished first append has no snapshot yet.
+        let mut sessions = known.to_vec();
+        for path in paths {
+            let file = open_regular(path)?;
             let bound = file.metadata().map_err(|e| e.to_string())?.len();
             let mut reader = BufReader::new(file.take(bound));
             let mut line = String::new();
@@ -470,11 +516,7 @@ impl Store {
                 }
             }
             if let Some(s) = session {
-                if s.summary.ended_unix_ms.is_none()
-                    || indexed.is_none_or(|closed| {
-                        closed.iter().any(|old| old.summary.id == s.summary.id)
-                    })
-                {
+                if s.summary.ended_unix_ms.is_none() || !valid_index {
                     sessions.push(s);
                 }
             }
@@ -1341,6 +1383,22 @@ mod tests {
             },
         )
         .unwrap();
+        // The first append can leave only session_start in JSONL, with a valid
+        // empty index but no active snapshot. It must survive CLI initialization.
+        let first_id = recorder.active.as_ref().unwrap().summary.id.clone();
+        let first_path = recorder.store.path(&first_id).unwrap();
+        let first_raw = fs::read(&first_path).unwrap();
+        let first_len = first_raw.iter().position(|&b| b == b'\n').unwrap() + 1;
+        fs::write(&first_path, &first_raw[..first_len]).unwrap();
+        fs::remove_file(recorder.store.dir.join("active.json")).unwrap();
+        assert!(recorder.store.closed().unwrap().is_empty());
+        let recovered = Store::new(&h).unwrap();
+        let pending = recovered.active().unwrap().unwrap();
+        assert_eq!(pending.summary.id, first_id);
+        assert_eq!(pending.committed_bytes, first_len as u64);
+        assert!(pending.summary.ended_unix_ms.is_none());
+        assert_eq!(fs::read(&first_path).unwrap(), first_raw[..first_len]);
+        recorder.active = Some(pending);
         recorder.finish(&h, "disconnected").unwrap();
         let store = &recorder.store;
         let id = store.closed().unwrap()[0].summary.id.clone();

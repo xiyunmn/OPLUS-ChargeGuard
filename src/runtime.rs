@@ -772,12 +772,7 @@ pub fn worker(h: &Hardware) -> Result<Value> {
                 .clone(),
         );
         // Compare semantic state separately from timestamps/diagnostic counters.
-        let mut comparison = snapshot.clone();
-        comparison.as_object_mut().unwrap().remove("sampled_ms");
-        comparison.as_object_mut().unwrap().remove("counters");
-        if let Some(listeners) = comparison["control_listeners"].as_object_mut() {
-            listeners.remove("wakeups");
-        }
+        let comparison = status_comparison(&snapshot);
         if last_snapshot.as_ref() != Some(&comparison)
             || last_published.elapsed() >= Duration::from_secs(120)
         {
@@ -1038,6 +1033,66 @@ pub fn ui_initial(h: &Hardware) -> Result<Value> {
         }
     }
 }
+fn status_comparison(snapshot: &Value) -> Value {
+    let mut comparison = snapshot.clone();
+    for key in ["sampled_ms", "counters", "round"] {
+        comparison.as_object_mut().unwrap().remove(key);
+    }
+    if let Some(listeners) = comparison["control_listeners"].as_object_mut() {
+        listeners.remove("wakeups");
+    }
+    if let Some(backends) = comparison["backends"].as_array_mut() {
+        for backend in backends {
+            if let Some(fields) = backend.as_object_mut() {
+                for key in ["checked_ms", "last_maintenance_ms", "verification_checks", "skipped_writes"] {
+                    fields.remove(key);
+                }
+            }
+        }
+    }
+    if let Some(helper) = comparison["pps_assist"].as_object_mut() {
+        helper.remove("observations");
+        if let Some(recovery) = helper.get_mut("recovery").and_then(Value::as_object_mut) {
+            recovery.remove("checked_ms");
+            recovery.remove("last_request_ms");
+        }
+        if let Some(diagnostics) = helper.get_mut("diagnostics").and_then(Value::as_object_mut) {
+            for key in ["query_ms", "used_ms", "queries", "successes", "uses"] {
+                diagnostics.remove(key);
+            }
+        }
+    }
+    comparison
+}
+
+#[cfg(test)]
+#[test]
+fn status_comparison_ignores_pps_observation_clock() {
+    let before = json!({"sampled_ms":10,"round":1,"counters":{},
+        "backends":[{"checked_ms":10,"last_maintenance_ms":10,"verification_checks":1,"skipped_writes":1,"state":"applied"}],
+        "pps_assist":{"observations":1,"diagnostics":{"query_ms":10,"used_ms":10,"queries":1,"successes":1,"uses":1,"failures":0},
+        "recovery":{"checked_ms":10,"last_request_ms":0,"state":"active","attempts":0,"error":0}}});
+    let mut after = before.clone();
+    after["sampled_ms"] = json!(20);
+    after["round"] = json!(2);
+    for key in ["checked_ms", "last_maintenance_ms", "verification_checks", "skipped_writes"] {
+        after["backends"][0][key] = json!(20);
+    }
+    after["pps_assist"]["observations"] = json!(20);
+    for key in ["query_ms", "used_ms", "queries", "successes", "uses"] {
+        after["pps_assist"]["diagnostics"][key] = json!(20);
+    }
+    after["pps_assist"]["recovery"]["checked_ms"] = json!(20);
+    after["pps_assist"]["recovery"]["last_request_ms"] = json!(20);
+    assert_eq!(status_comparison(&before), status_comparison(&after));
+    assert_eq!(after["pps_assist"]["recovery"]["checked_ms"], 20);
+    for (key, value) in [("state", json!("requesting")), ("attempts", json!(1)), ("error", json!(-1))] {
+        let mut changed = after.clone();
+        changed["pps_assist"]["recovery"][key] = value;
+        assert_ne!(status_comparison(&before), status_comparison(&changed));
+    }
+}
+
 fn status_view(h: &Hardware, thermal_readings: bool) -> Result<Value> {
     let mut snapshot: Option<Value> =
         storage::load::<Value>(&h.state().join("status.json"), 2_097_152)
@@ -1056,6 +1111,8 @@ fn status_view(h: &Hardware, thermal_readings: bool) -> Result<Value> {
             h.control_namespace()?;
         }
         s["battery"] = battery(h);
+        // Live diagnostics do not require persisting each observation timestamp.
+        s["pps_assist"] = json!(crate::pps::status(h).ok());
         if let Ok(controller) = thermal_readings.then(|| Controller::load(h)).transpose() {
             if let Some(controller) = controller {
                 s["nodes"] = json!(node_views(h, &controller));
