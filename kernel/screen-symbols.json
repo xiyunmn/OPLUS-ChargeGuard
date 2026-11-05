@@ -13,6 +13,7 @@
   "fortify_panic": 3419703692,
   "get_device": 449467262,
   "init_timer_key": 2043632007,
+  "jiffies": 364531878,
   "kfree": 58330298,
   "memset": 3703006381,
   "misc_deregister": 439861025,

@@ -1,12 +1,17 @@
 (function(){
 'use strict';
 const $=id=>document.getElementById(id),ns='http://www.w3.org/2000/svg';
-const metrics={net_power_w:{label:'电池净功率',unit:'W'},current_ma:{label:'电池电流',unit:'mA'},voltage_mv:{label:'电芯电压',unit:'mV'},soc:{label:'电量',unit:'%'}};
+const metrics={net_power_w:{label:'电池净功率',unit:'W',scale:1,digits:1,tone:'--accent-ink'},current_ma:{label:'电池电流',unit:'A',scale:1000,digits:2,tone:'--teal'},voltage_mv:{label:'电芯电压',unit:'V',scale:1000,digits:2,tone:'--purple'},soc:{label:'电量',unit:'%',scale:1,digits:0,tone:'--green'},temp_c:{label:'电池温度',unit:'℃',scale:1,digits:1,tone:'--orange'}};
+const metricPreference='chargeguard-statistics-metrics';
+let chartMetrics=['net_power_w','temp_c'];
+try{const saved=JSON.parse(localStorage.getItem(metricPreference));if(Array.isArray(saved)&&saved.length===2&&saved.every(key=>Object.hasOwn(metrics,key)))chartMetrics=saved;}catch(_){}
 let opened=false,viewOpen=true,view='current',returnView='current',viewHistory=false,dialogHistory=false,dialogKind='',backdropPress=false,returnAfterDialog=false;
 let enabled=true,runtime=null,recordingError=null,listLoaded=false,listBusy=false,detailBusy=false,storageBusy=false,deleting=false;
 let active=null,latestSession=null,items=[],total=0,aggregate={},storage=null,measurement=null,activeDetail=null,selectedDetail=null,selectedId=null;
-let range='7',filter={protocols:[],completeness:'all'},metric='net_power_w',period='full',cursorElapsed=null,windowStart=0,windowEnd=null;
-let generation=0,filterGeneration=0,windowGeneration=0,pollTimer=null,windowTimer=null,job=null,exportStarting=false,exportPolling=false;
+let range='7',filter={protocols:[],completeness:'all'},period='full',cursorElapsed=null,windowStart=0,windowEnd=null;
+let generation=0,filterGeneration=0,windowGeneration=0,pollTimer=null,job=null,exportStarting=false,exportPolling=false;
+let expanded=false,expandedScroll=0,windowEditing=false,windowRefreshPending=false,windowPreview=false,chartFrame=null,cursorFrame=null,chartLayout=null;
+const measureText=document.createElement('canvas').getContext('2d');
 const dialog=$('statistics-dialog'),body=$('statistics-dialog-body');
 function el(tag,text,cls){const node=document.createElement(tag);if(text!=null)node.textContent=text;if(cls)node.className=cls;return node;}
 function svgIcon(name){const node=document.createElementNS(ns,'svg'),use=document.createElementNS(ns,'use');node.setAttribute('class','icon');node.setAttribute('aria-hidden','true');use.setAttribute('href','#i-'+name);node.append(use);return node;}
@@ -44,7 +49,7 @@ function present(){
   header();$('statistics-tabs').hidden=view==='settings'||view==='detail';
   $('statistics-current').hidden=!['current','detail'].includes(view);$('statistics-history').hidden=view!=='history';$('statistics-record-settings').hidden=view!=='settings';
   for(const key of ['current','history']){const button=$('statistics-tab-'+key);button.setAttribute('aria-selected',String(view===key));button.tabIndex=view===key?0:-1;}
-  $('statistics-chart-period').hidden=view==='detail';$('statistics-window').hidden=view!=='detail';$('statistics-detail-actions').hidden=view!=='detail';
+  $('statistics-chart-period').hidden=view==='detail';$('statistics-window').hidden=view!=='detail';$('statistics-window-reset').hidden=view!=='detail';$('statistics-detail-actions').hidden=view!=='detail';
   renderSession();if(view==='history')renderHistory();if(view==='settings')renderStorage();
 }
 function setView(next,push=true){
@@ -53,12 +58,12 @@ function setView(next,push=true){
     returnView=['current','history'].includes(view)?view:returnView;
     if(push&&!viewHistory){history.pushState({...history.state,chargeGuardStatisticsView:true},'');viewHistory=true;}
   }
-  view=next;cursorElapsed=null;windowStart=0;windowEnd=null;windowGeneration++;present();$('content').scrollTop=0;
+  view=next;cursorElapsed=null;windowStart=0;windowEnd=null;windowEditing=false;windowRefreshPending=false;windowPreview=false;windowGeneration++;present();$('content').scrollTop=0;
   if(live()){if(next==='settings')loadStorage();else if(next==='detail')loadDetail(true);else loadList();}
   schedule();
 }
 function leaveSubview(){if(viewHistory&&history.state?.chargeGuardStatisticsView){history.back();return;}viewHistory=false;setView(returnView,false);}
-function stop(){generation++;if(pollTimer!==null)clearTimeout(pollTimer);pollTimer=null;if(windowTimer!==null)clearTimeout(windowTimer);windowTimer=null;}
+function stop(){generation++;if(pollTimer!==null)clearTimeout(pollTimer);pollTimer=null;}
 function schedule(delay=5000){
   if(pollTimer!==null)clearTimeout(pollTimer);pollTimer=null;if(!live())return;
   pollTimer=setTimeout(async()=>{pollTimer=null;if(!live())return;
@@ -81,20 +86,24 @@ async function loadList(append=false,quiet=false){
   finally{listBusy=false;$('statistics-load-more').disabled=false;if(live()&&(query!==filterGeneration||token!==generation&&!listLoaded))loadList();}
 }
 async function loadDetail(reset=false,windowed=false){
-  const id=view==='detail'?selectedId:currentSession()?.id;if(!id||!live()||detailBusy)return;
+  const id=view==='detail'?selectedId:currentSession()?.id;if(!id||!live()||detailBusy||windowEditing)return;
+  if(view==='detail'&&windowRefreshPending){reset=true;windowed=true;windowRefreshPending=false;}
   detailBusy=true;const token=generation,windowToken=windowGeneration,isDetail=view==='detail',old=isDetail?selectedDetail:activeDetail;
   const args={action:'detail',id};
   if(!reset&&old?.summary?.id===id)args.cursor=old.cursor;
   if(windowed){args.from_elapsed_ms=windowStart;args.to_elapsed_ms=windowEnd;args.max_points=1200;delete args.cursor;}
   try{
-    const result=await request(args);if(!live()||token!==generation||id!==(isDetail?selectedId:currentSession()?.id)||windowed&&windowToken!==windowGeneration)return;
+    const result=await request(args);if(!live()||token!==generation||id!==(isDetail?selectedId:currentSession()?.id)||windowToken!==windowGeneration)return;
     const incremental=!reset&&!windowed&&!result.reset&&old?.summary?.id===id;
     if(incremental){const last=old.points.at(-1)?.seq;result.points=old.points.concat((result.points||[]).filter(point=>last==null||point.seq>last));result.events=old.events.concat(result.events||[]);}
     result.points=result.points||[];result.events=result.events||[];
-    if(isDetail)selectedDetail=result;else activeDetail=result;
+    result.overview_points=windowed?(old?.overview_points||old?.points||[]):incremental&&old?.overview_points?old.overview_points.concat(result.points.filter(point=>point.seq>(old.overview_points.at(-1)?.seq??-1))):result.points;
+    // A zoomed query must retain the full record's extent, not its last visible point.
+    result.chart_end_ms=windowed&&old?.chart_end_ms!=null?old.chart_end_ms:chargeSpan(result.summary,result.points,result.events);
+    windowPreview=false;if(isDetail)selectedDetail=result;else activeDetail=result;
     renderSession();
   }catch(error){if(live()&&token===generation)notice('曲线读取失败：'+error.message,true);}
-  finally{detailBusy=false;if(live()&&['current','detail'].includes(view)){const target=view==='detail'?selectedId:currentSession()?.id;if(target&&(target!==id||(view==='detail')!==isDetail||token!==generation))loadDetail(true);else if(view==='detail'&&windowToken!==windowGeneration)loadDetail(true,true);}}
+  finally{detailBusy=false;if(live()&&['current','detail'].includes(view)){const target=view==='detail'?selectedId:currentSession()?.id;if(target&&(target!==id||(view==='detail')!==isDetail||token!==generation))loadDetail(true);else if(view==='detail'&&windowRefreshPending)loadDetail(true,true);}}
 }
 async function loadStorage(){
   if(!live()||storageBusy)return;storageBusy=true;const token=generation;
@@ -152,50 +161,121 @@ function renderEvents(events,summary){
   $('statistics-events').replaceChildren(...nodes);
 }
 function endReason(reason){return ({disconnected:'已拔线',disabled:'自动记录关闭',module_stopped:'模块停止',interrupted:'记录中断',recording_error:'记录异常',power_state_unknown:'充电状态未知'})[reason]||'记录结束';}
-function timeBounds(){const summary=currentSummary(),last=currentData()?.points.at(-1);const end=Math.max(1000,Number(summary?.elapsed_ms)||0,Number(last?.elapsed_ms)||0);if(view==='detail')return [Math.min(windowStart,end),Math.max(windowStart+1000,Math.min(windowEnd??end,end))];return [period==='recent'?Math.max(0,end-900000):0,end];}
-function visiblePoints(){const [start,end]=timeBounds();return (currentData()?.points||[]).filter(point=>point.elapsed_ms>=start&&point.elapsed_ms<=end);}
+function chargeSpan(summary,points=[],events=[]){
+  // Connection duration includes time spent plugged in after charging has finished.
+  const samples=[...(summary?.sparkline||[]),...points];if(summary?.latest)samples.push(summary.latest);
+  const states=samples.map(point=>({time:Number(point.elapsed_ms)||0,status:point.status}));
+  for(const event of events)if(event.kind==='power_state'&&event.detail?.connected!==false)states.push({time:Number(event.elapsed_ms)||0,status:event.detail?.status});
+  const lastCharging=states.reduce((last,state)=>state.status==='Charging'?Math.max(last,state.time):last,-1);
+  const full=states.filter(state=>state.status==='Full'&&state.time>=lastCharging).map(state=>state.time);
+  if(full.length)return Math.max(1000,Math.min(...full));
+  const charged=samples.filter(point=>point.status==='Charging'||point.status==='Full');
+  // Pause the visible span at the last charging point; a later Charging sample
+  // extends it again and naturally includes the intervening pause.
+  const relevant=charged.length?charged:samples;
+  return Math.max(1000,...relevant.map(point=>Number(point.elapsed_ms)||0));
+}
+function chartEnd(){const data=currentData();return data?.chart_end_ms??chargeSpan(currentSummary(),data?.points,data?.events);}
+function timeBounds(){const end=chartEnd();if(view==='detail'){const start=Math.min(windowStart,Math.max(0,end-1000));return [start,Math.max(start+1000,Math.min(windowEnd??end,end))];}return [period==='recent'?Math.max(0,end-900000):0,end];}
+function visiblePoints(){const [start,end]=timeBounds(),data=currentData(),points=windowPreview?data?.overview_points||data?.points:data?.points;return (points||[]).filter(point=>point.elapsed_ms>=start&&point.elapsed_ms<=end);}
 function valueRange(points,key){const values=points.map(point=>number(point[key])).filter(value=>value!=null);if(key==='soc')return [0,100];if(!values.length)return key==='temp_c'?[25,45]:[0,60];let low=Math.min(...values),high=Math.max(...values);if(key==='temp_c'){low=Math.floor((low-1)/5)*5;high=Math.ceil((high+1)/5)*5;}else{low=Math.min(0,low);const span=Math.max(1,high-low);high+=span*.1;const step=Math.pow(10,Math.floor(Math.log10(Math.max(1,high))))/2;high=Math.ceil(high/step)*step;}return low===high?[low,high+1]:[low,high];}
-function pathFor(points,key,bounds,limits,box){
+function pathFor(points,key,bounds,limits,box,scale=1){
   const [start,end]=bounds,[low,high]=limits,{left,right,top,bottom}=box;let path='',previous=null;
-  for(const point of points){const value=number(point[key]);if(value==null){previous=null;continue;}const x=left+(point.elapsed_ms-start)/Math.max(1,end-start)*(right-left),y=bottom-(value-low)/Math.max(1,high-low)*(bottom-top);const move=!previous||point.gap_before;path+=(move?'M':'L')+x.toFixed(2)+' '+y.toFixed(2);previous=point;}
+  for(const point of points){const value=number(point[key]);if(value==null){previous=null;continue;}const x=left+(point.elapsed_ms-start)/Math.max(1,end-start)*(right-left),y=bottom-(value/scale-low)/Math.max(Number.EPSILON,high-low)*(bottom-top);const move=!previous||point.gap_before;path+=(move?'M':'L')+x.toFixed(2)+' '+y.toFixed(2);previous=point;}
   return path;
 }
-function renderChart(id,points,key,bounds,selected){
-  const svg=$(id),box={left:43,right:541,top:12,bottom:133},limits=valueRange(points,key),[start,end]=bounds,summary=currentSummary();
-  const [low,high]=limits;let markup='';
-  for(let i=0;i<4;i++){const y=box.bottom-(box.bottom-box.top)*i/3,value=low+(high-low)*i/3;markup+='<line class="stats-grid" x1="43" x2="541" y1="'+y+'" y2="'+y+'"/><text class="stats-axis" text-anchor="end" x="34" y="'+(y+6)+'">'+format(value,key==='temp_c'?0:key==='net_power_w'&&high<10?1:0)+'</text>';}
-  for(let i=0;i<5;i++){const x=box.left+(box.right-box.left)*i/4,t=start+(end-start)*i/4;markup+='<text class="stats-axis" text-anchor="'+(i===0?'start':i===4?'end':'middle')+'" x="'+x+'" y="161">'+elapsed(t)+'</text>';}
-  let previous=null;for(const point of points){if(previous&&point.gap_before){const x1=box.left+(previous.elapsed_ms-start)/(end-start)*(box.right-box.left),x2=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left);markup+='<rect class="stats-gap" x="'+x1+'" y="12" width="'+Math.max(0,x2-x1)+'" height="121"/>';}previous=point;}
-  const path=pathFor(points,key,bounds,limits,box);markup+='<path class="stats-line" d="'+path+'"/>';
-  for(let i=0;i<points.length;i++){const point=points[i],value=number(point[key]),before=points[i-1],after=points[i+1];if(value!=null&&(!before||point.gap_before||number(before[key])==null)&&(!after||after.gap_before||number(after[key])==null)){const x=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left),y=box.bottom-(value-low)/(high-low)*(box.bottom-box.top);markup+='<circle class="stats-point" cx="'+x+'" cy="'+y+'" r="3"/>';}}
-  if(!path)markup+='<text class="stats-missing" x="292" y="79" text-anchor="middle">暂无有效读数</text>';
-  if(selected){const x=box.left+(selected.elapsed_ms-start)/(end-start)*(box.right-box.left);markup+='<line class="stats-cursor-line" x1="'+x+'" x2="'+x+'" y1="8" y2="136"/>';const value=number(selected[key]);if(value!=null){const y=box.bottom-(value-low)/(high-low)*(box.bottom-box.top);markup+='<circle class="stats-point" cx="'+x+'" cy="'+y+'" r="4.5"/>';}}
-  svg.innerHTML=markup;
+function textWidth(value,size){measureText.font=size+'px '+getComputedStyle($('statistics-chart-card')).fontFamily;return measureText.measureText(value).width;}
+function niceStep(value){const base=10**Math.floor(Math.log10(Math.max(value,0.000001))),fraction=value/base;return ([1,2,2.5,5,10].find(step=>step>=fraction)||10)*base;}
+function axisValue(value){return String(Number(value.toFixed(4)));}
+function chartLimits(points,key){
+  if(key==='soc')return {low:0,high:100,ticks:[0,20,40,60,80,100]};
+  const info=metrics[key],values=points.map(point=>number(point[key])).filter(value=>value!=null).map(value=>value/info.scale);
+  if(!values.length)return {low:0,high:1,ticks:[0,.25,.5,.75,1]};
+  let low=Math.min(...values),high=Math.max(...values);
+  if(key!=='temp_c'&&key!=='voltage_mv')low=Math.min(0,low);
+  const span=Math.max(high-low,Math.abs(high)*.05,.1),step=niceStep(span/4);
+  low=Math.floor((low-(key==='temp_c'||key==='voltage_mv'?span*.06:0))/step)*step;
+  high=Math.ceil((high+span*.06)/step)*step;if(high<=low)high=low+step;
+  const ticks=[];for(let i=0;i<=Math.round((high-low)/step);i++)ticks.push(low+i*step);
+  return {low,high,ticks};
+}
+function timeTicks(start,end,width,fontSize){
+  const count=Math.max(2,Math.min(5,Math.floor(width/76))),wanted=(end-start)/(count-1);
+  const step=[1000,2000,5000,10000,15000,30000,60000,120000,300000,600000,900000,1800000,3600000].find(value=>value>=wanted)||niceStep(wanted);
+  const ticks=[start];let previous=start;
+  for(let t=Math.ceil(start/step)*step;t<end;t+=step){if(t<=start)continue;const x=(t-previous)/(end-start)*width;if(x>=textWidth(elapsed(previous),fontSize)/2+textWidth(elapsed(t),fontSize)/2+12){ticks.push(t);previous=t;}}
+  if(ticks.length>1&&(end-previous)/(end-start)*width<textWidth(elapsed(previous),fontSize)/2+textWidth(elapsed(end),fontSize)/2+12)ticks.pop();
+  ticks.push(end);return ticks;
+}
+function renderChart(id,points,key,bounds,limits,geometry){
+  const svg=$(id),width=svg.clientWidth,height=svg.clientHeight,box={left:geometry.left,right:width-12,top:8,bottom:height-26},[start,end]=bounds,{low,high,ticks}=limits;
+  svg.setAttribute('viewBox','0 0 '+width+' '+height);svg.setAttribute('aria-label',metrics[key].label+'曲线');
+  let markup='';
+  for(const value of ticks){const y=box.bottom-(value-low)/(high-low)*(box.bottom-box.top);markup+='<line class="stats-grid" x1="'+box.left+'" x2="'+box.right+'" y1="'+y+'" y2="'+y+'"/><text class="stats-axis" text-anchor="end" x="'+(box.left-8)+'" y="'+y+'" dominant-baseline="middle">'+axisValue(value)+'</text>';}
+  for(const t of timeTicks(start,end,box.right-box.left,geometry.axisFont)){const x=box.left+(t-start)/(end-start)*(box.right-box.left);markup+='<text class="stats-axis" text-anchor="'+(t===start?'start':t===end?'end':'middle')+'" x="'+x+'" y="'+(height-5)+'">'+elapsed(t)+'</text>';}
+  let previous=null;for(const point of points){if(previous&&point.gap_before){const x1=box.left+(previous.elapsed_ms-start)/(end-start)*(box.right-box.left),x2=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left);markup+='<rect class="stats-gap" x="'+x1+'" y="'+box.top+'" width="'+Math.max(0,x2-x1)+'" height="'+(box.bottom-box.top)+'"/>';}previous=point;}
+  const path=pathFor(points,key,bounds,[low,high],box,metrics[key].scale);markup+='<path class="stats-line" d="'+path+'"/>';
+  for(let i=0;i<points.length;i++){const point=points[i],value=number(point[key]),before=points[i-1],after=points[i+1];if(value!=null&&(!before||point.gap_before||number(before[key])==null)&&(!after||after.gap_before||number(after[key])==null)){const x=box.left+(point.elapsed_ms-start)/(end-start)*(box.right-box.left),y=box.bottom-(value/metrics[key].scale-low)/(high-low)*(box.bottom-box.top);markup+='<circle class="stats-point" cx="'+x+'" cy="'+y+'" r="2.5"/>';}}
+  if(!path)markup+='<text class="stats-missing" x="'+((box.left+box.right)/2)+'" y="'+((box.top+box.bottom)/2)+'" text-anchor="middle">暂无有效读数</text>';
+  svg.innerHTML=markup+'<g id="'+id+'-cursor" pointer-events="none"></g>';
+  return {id,key,box,limits};
+}
+function cursorPoint(points,bounds){
+  if(!points.length)return null;
+  if(cursorElapsed==null)return view==='current'?points.at(-1):null;
+  const time=Math.max(bounds[0],Math.min(bounds[1],cursorElapsed));
+  const index=points.findIndex(point=>point.elapsed_ms>=time),after=index<0?null:points[index],before=index<0?points.at(-1):points[index-1];
+  if(after?.elapsed_ms===time)return after;
+  if(!after||!before||after.gap_before)return {elapsed_ms:time,gap:true};
+  return time-before.elapsed_ms<=after.elapsed_ms-time?before:after;
+}
+function renderCursor(){
+  if(!chartLayout)return;
+  const {points,bounds,plots,fontSize}=chartLayout,[start,end]=bounds,selected=cursorPoint(points,bounds);
+  const reading=$('statistics-cursor');reading.hidden=!selected;$('statistics-cursor-row').classList.toggle('has-cursor',!!selected);$('statistics-cursor-hint').hidden=!!selected;
+  for(const {id,key,box,limits} of plots){const layer=$(id+'-cursor'),valueId=id.replace('-chart','-value');if(!selected){text(valueId,'—');layer.replaceChildren();continue;}
+    const x=box.left+(selected.elapsed_ms-start)/(end-start)*(box.right-box.left),info=metrics[key],raw=number(selected[key]),value=raw==null?null:raw/info.scale;
+    const y=value==null?box.top+20:box.bottom-(value-limits.low)/(limits.high-limits.low)*(box.bottom-box.top);
+    const rounded=value==null?null:Number(value.toFixed(info.digits)),label=rounded==null?'—':(rounded===0?0:rounded).toFixed(info.digits),valueWidth=textWidth(label,fontSize*.71875),unitWidth=textWidth(info.unit,fontSize*.5625),height=28,width=Math.ceil(valueWidth+unitWidth+19);
+    text(valueId,label);
+    const labelX=Math.max(box.left,Math.min(x+width+12>box.right?x-width-10:x+10,box.right-width)),labelY=Math.max(box.top,Math.min(y-height-10<box.top?y+10:y-height-10,box.bottom-height));
+    layer.innerHTML='<line class="stats-cursor-line" x1="'+x+'" x2="'+x+'" y1="'+box.top+'" y2="'+box.bottom+'"/>'+(value==null?'':'<circle class="stats-point" cx="'+x+'" cy="'+y+'" r="4"/>')+'<g transform="translate('+labelX+' '+labelY+')"><rect class="stats-value-box" width="'+width+'" height="'+height+'" rx="6"/><text class="stats-value-text" x="7" y="18">'+label+'</text><text class="stats-value-unit" x="'+(valueWidth+11)+'" y="18">'+info.unit+'</text></g>';
+  }
+  if(selected){const time=selected.gap?'无采样':new Date(selected.unix_ms).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    reading.replaceChildren(el('strong',elapsed(selected.elapsed_ms)),el('small',time));if(!selected.gap)reading.append(el('small',protocol(selected.protocol)));
+    const box=plots[0].box,x=box.left+(selected.elapsed_ms-start)/(end-start)*(box.right-box.left);reading.style.left=Math.max(0,Math.min(x-reading.offsetWidth/2,plots[0].box.right-reading.offsetWidth))+'px';$('statistics-cursor-row').style.setProperty('--cursor-x',x+'px');
+  }
+}
+function queueCursor(){if(cursorFrame!==null)return;cursorFrame=requestAnimationFrame(()=>{cursorFrame=null;if(opened)renderCursor();});}
+function queueCharts(){if(chartFrame!==null)return;chartFrame=requestAnimationFrame(()=>{chartFrame=null;if(opened&&['current','detail'].includes(view))renderCharts();});}
+function renderProtocols(points,bounds,fontSize){
+  const timeline=$('statistics-protocol-track'),[start,end]=bounds,segments=[];let current=null;
+  for(let i=0;i<points.length;i++){const point=points[i],name=protocol(point.protocol),to=Math.min(end,points[i+1]?.elapsed_ms??end),from=Math.max(start,point.elapsed_ms);if(to<=from)continue;const gap=!!points[i+1]?.gap_before;
+    if(current&&current.name===name&&!point.gap_before&&!current.gap&&!gap)current.to=to;else{current={name,from,to,gap};segments.push(current);}}
+  const width=timeline.clientWidth;
+  timeline.replaceChildren(...segments.map(segment=>{const pixels=(segment.to-segment.from)/(end-start)*width,label=!segment.gap&&pixels>=textWidth(segment.name,fontSize*.5625)+12?segment.name:'',node=el('span',label,segment.gap?'stats-protocol-gap':null);node.style.left=(segment.from-start)/(end-start)*100+'%';node.style.width=(segment.to-segment.from)/(end-start)*100+'%';node.title=(segment.gap?'数据缺失':segment.name)+' · '+elapsed(segment.from)+'—'+elapsed(segment.to);node.setAttribute('aria-label',node.title);return node;}));
+  if(!segments.length){const node=el('span',currentData()?'协议记录不可用':'正在读取曲线');node.style.inset='0';timeline.append(node);}
+}
+function renderWindow(bounds){
+  if(view!=='detail')return;
+  const [start,end]=bounds,max=chartEnd();windowStart=start;windowEnd=windowEnd==null?null:end;
+  for(const id of ['statistics-window-start','statistics-window-end'])$(id).max=String(max);
+  $('statistics-window-start').value=String(start);$('statistics-window-end').value=String(end);
+  for(const [id,value] of [['statistics-window-start',start],['statistics-window-end',end]])$(id).setAttribute('aria-valuetext',elapsed(value));
+  text('statistics-window-start-label',elapsed(start));text('statistics-window-end-label',elapsed(end));$('statistics-window-selection').style.left=start/max*100+'%';$('statistics-window-selection').style.width=(end-start)/max*100+'%';$('statistics-window-reset').disabled=start===0&&end===max;
 }
 function renderCharts(){
-  const data=currentData(),summary=currentSummary();if(!summary)return;
-  const points=visiblePoints(),bounds=timeBounds(),[start,end]=bounds;
-  const selected=cursorElapsed==null?null:points.reduce((best,point)=>!best||Math.abs(point.elapsed_ms-cursorElapsed)<Math.abs(best.elapsed_ms-cursorElapsed)?point:best,null);
-  const info=metrics[metric];text('statistics-upper-label',info.label+' · '+info.unit);$('statistics-upper-chart').setAttribute('aria-label',info.label+'曲线');
-  renderChart('statistics-upper-chart',points,metric,bounds,selected);renderChart('statistics-temperature-chart',points,'temp_c',bounds,selected);
-  const tooltip=$('statistics-cursor');tooltip.hidden=!selected;
-  if(selected){tooltip.textContent=clock(selected.unix_ms)+' · '+elapsed(selected.elapsed_ms)+'\n'+format(selected[metric],metric==='soc'?0:1)+' '+info.unit+' · '+format(selected.temp_c)+' ℃';tooltip.style.left=Math.max(19,Math.min(81,100*(43+(selected.elapsed_ms-start)/(end-start)*498)/560))+'%';}
-  const timeline=$('statistics-protocol-track'),segments=[];let current=null;
-  for(let i=0;i<points.length;i++){const point=points[i],name=point.protocol||'unknown',to=Math.min(end,points[i+1]?.elapsed_ms??end),from=Math.max(start,point.elapsed_ms);if(to<=from)continue;const gap=points[i+1]?.gap_before;
-    if(current&&current.name===name&&!point.gap_before&&!current.gap&&!gap)current.to=to;else{current={name,from,to,gap};segments.push(current);}}
-  timeline.replaceChildren(...segments.map(segment=>{const node=el('span',segment.gap?'':protocol(segment.name),segment.gap?'stats-protocol-gap':null);node.style.flex=String(Math.max(1,segment.to-segment.from));node.title=segment.gap?'数据缺失':protocol(segment.name);return node;}));
-  if(!segments.length)timeline.append(el('span',data?'协议记录不可用':'正在读取曲线'));
-  if(view==='detail'){
-    const max=Math.max(1000,Number(summary.elapsed_ms)||0),to=windowEnd??max;
-    for(const id of ['statistics-window-start','statistics-window-end'])$(id).max=String(max);
-    $('statistics-window-start').value=String(windowStart);$('statistics-window-end').value=String(to);
-    text('statistics-window-start-label',elapsed(windowStart));text('statistics-window-end-label',elapsed(to));$('statistics-window-selection').style.left=windowStart/max*100+'%';$('statistics-window-selection').style.width=(to-windowStart)/max*100+'%';
-  }
-  text('statistics-chart-note',!data?'正在读取曲线…':!points.length?'此时间范围暂无采样，读数不可用时显示 —':'按实际时间绘制，缺失处断开 · 滑动查看读数');
+  const data=currentData(),summary=currentSummary(),upper=$('statistics-upper-chart');if(!summary||!upper.clientWidth)return;
+  const points=visiblePoints(),bounds=timeBounds(),fontSize=parseFloat(getComputedStyle(document.documentElement).fontSize),limits=chartMetrics.map(key=>chartLimits(points,key)),axisFont=fontSize*.625;
+  const left=Math.max(34,...limits.flatMap(limit=>limit.ticks.map(value=>textWidth(axisValue(value),axisFont)+10)));
+  $('statistics-chart-card').style.setProperty('--plot-left',Math.ceil(left)+'px');
+  const plots=['upper','lower'].map((position,index)=>{const key=chartMetrics[index],info=metrics[key],choices=$('statistics-'+position+'-metric'),svg=$('statistics-'+position+'-chart');for(const button of choices.children)button.setAttribute('aria-pressed',String(button.dataset.metric===key));for(const node of [choices.parentElement,svg.parentElement])node.style.setProperty('--chart-tone','var('+info.tone+')');choices.parentElement.style.setProperty('--metric-soft','var('+(key==='net_power_w'?'--soft':info.tone+'-bg')+')');text('statistics-'+position+'-label',info.label);text('statistics-'+position+'-unit',info.unit);return renderChart(svg.id,points,key,bounds,limits[index],{left:Math.ceil(left),axisFont});});
+  chartLayout={points,bounds,plots,fontSize};renderProtocols(points,bounds,fontSize);renderWindow(bounds);renderCursor();
+  text('statistics-chart-note',!data?'正在读取曲线…':!points.length?'此时间范围暂无采样':'按实际时间绘制 · 缺失处断开');
 }
 function sparkline(summary){
-  const points=summary.sparkline||[],svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 300 76');svg.setAttribute('class','stats-sparkline');svg.setAttribute('aria-hidden','true');
-  const bounds=[0,Math.max(1,Number(summary.elapsed_ms)||0)],upper=pathFor(points,'net_power_w',bounds,valueRange(points,'net_power_w'),{left:1,right:299,top:2,bottom:39}),lower=pathFor(points,'temp_c',bounds,valueRange(points,'temp_c'),{left:1,right:299,top:49,bottom:73});
+  const end=chargeSpan(summary),points=(summary.sparkline||[]).filter(point=>point.elapsed_ms<=end),svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 300 76');svg.setAttribute('class','stats-sparkline');svg.setAttribute('aria-hidden','true');
+  const bounds=[0,end],upper=pathFor(points,'net_power_w',bounds,valueRange(points,'net_power_w'),{left:1,right:299,top:2,bottom:39}),lower=pathFor(points,'temp_c',bounds,valueRange(points,'temp_c'),{left:1,right:299,top:49,bottom:73});
   svg.innerHTML='<path class="stats-spark-grid" d="M0 40H300M0 75H300"/><path class="stats-spark-power" d="'+upper+'"/><path class="stats-spark-temp" d="'+lower+'"/>';return svg;
 }
 function renderHistory(){
@@ -298,21 +378,78 @@ function openMeasurement(){
   if(source){copy.append(el('p','当前记录口径：'+(source.cell_count?source.cell_count+'芯':'芯数未确认')+'；'+(source.power_available?'电池净功率可用':'电池净功率不可用')+'。'));if(typeof source.note==='string')copy.append(el('p',source.note));}
   content.append(copy);
 }
-function chooseCursor(event){
-  const points=visiblePoints();if(!points.length)return;
-  const box=$('statistics-upper-chart').getBoundingClientRect(),x=(event.clientX-box.left)/box.width,[start,end]=timeBounds();cursorElapsed=start+Math.max(0,Math.min(1,(x*560-43)/498))*(end-start);renderCharts();
+function chooseCursor(clientX){
+  if(!chartLayout?.points.length)return;
+  const rect=$('statistics-upper-chart').getBoundingClientRect(),box=chartLayout.plots[0].box,[start,end]=chartLayout.bounds;
+  cursorElapsed=start+Math.max(0,Math.min(1,(clientX-rect.left-box.left)/(box.right-box.left)))*(end-start);queueCursor();
 }
 const touch=$('statistics-chart-touch');let chartPointer=null;
-touch.addEventListener('pointerdown',event=>{if(event.button!==0)return;chartPointer=event.pointerId;touch.setPointerCapture(event.pointerId);chooseCursor(event);});
-touch.addEventListener('pointermove',event=>{if(chartPointer===event.pointerId)chooseCursor(event);});
-for(const name of ['pointerup','pointercancel','lostpointercapture'])touch.addEventListener(name,()=>{chartPointer=null;});
-touch.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Escape'].includes(event.key))return;event.preventDefault();if(event.key==='Escape'){cursorElapsed=null;renderCharts();return;}const points=visiblePoints();if(!points.length)return;let index=cursorElapsed==null?0:points.reduce((best,point,i)=>Math.abs(point.elapsed_ms-cursorElapsed)<Math.abs(points[best].elapsed_ms-cursorElapsed)?i:best,0);index=Math.max(0,Math.min(points.length-1,index+(event.key==='ArrowRight'?1:-1)));cursorElapsed=points[index].elapsed_ms;renderCharts();});
-for(const input of [$('statistics-window-start'),$('statistics-window-end')])input.addEventListener('input',()=>{
-  const max=Number(input.max),minimum=Math.min(1000,max);let start=Number($('statistics-window-start').value),end=Number($('statistics-window-end').value);
-  if(input.id==='statistics-window-start')start=Math.max(0,Math.min(start,end-minimum));else end=Math.min(max,Math.max(end,start+minimum));
-  windowStart=start;windowEnd=end;windowGeneration++;cursorElapsed=null;renderCharts();if(windowTimer!==null)clearTimeout(windowTimer);windowTimer=setTimeout(()=>{windowTimer=null;if(live()&&view==='detail')loadDetail(true,true);},250);
+touch.addEventListener('pointerdown',event=>{
+  if(event.button!==0||!event.target.closest('.stats-chart'))return;
+  chartPointer={id:event.pointerId,x:event.clientX,y:event.clientY,mode:event.pointerType==='touch'?null:'inspect'};touch.setPointerCapture(event.pointerId);
+  if(chartPointer.mode){event.preventDefault();chooseCursor(event.clientX);}
 });
-for(const button of document.querySelectorAll('[data-stat-metric]'))button.onclick=()=>{metric=button.dataset.statMetric;groupButtons('[data-stat-metric]',metric);renderCharts();};
+touch.addEventListener('pointermove',event=>{
+  if(chartPointer?.id!==event.pointerId)return;
+  const dx=Math.abs(event.clientX-chartPointer.x),dy=Math.abs(event.clientY-chartPointer.y);
+  if(!chartPointer.mode){if(Math.max(dx,dy)<8)return;chartPointer.mode=dx>dy*1.2?'inspect':'scroll';}
+  if(chartPointer.mode==='inspect'){event.preventDefault();chooseCursor(event.clientX);}
+});
+touch.addEventListener('pointerup',event=>{if(chartPointer?.id!==event.pointerId)return;if(chartPointer.mode!=='scroll')chooseCursor(event.clientX);chartPointer=null;});
+for(const name of ['pointercancel','lostpointercapture'])touch.addEventListener(name,()=>{chartPointer=null;});
+touch.addEventListener('keydown',event=>{
+  if(event.target.closest('select,button')||!['ArrowLeft','ArrowRight','Escape'].includes(event.key))return;
+  event.preventDefault();if(event.key==='Escape'){cursorElapsed=null;renderCursor();return;}
+  const points=chartLayout?.points||[];if(!points.length)return;
+  let index=cursorElapsed==null?(view==='current'?points.length-1:-1):points.reduce((best,point,i)=>Math.abs(point.elapsed_ms-cursorElapsed)<Math.abs(points[best].elapsed_ms-cursorElapsed)?i:best,0);
+  index=Math.max(0,Math.min(points.length-1,index+(event.key==='ArrowRight'?1:-1)));cursorElapsed=points[index].elapsed_ms;renderCursor();
+});
+function adjustWindow(id,value){
+  const max=chartEnd(),minimum=Math.min(1000,max);let start=windowStart,end=windowEnd??max;
+  if(id==='statistics-window-start')start=Math.max(0,Math.min(value,end-minimum));else end=Math.min(max,Math.max(value,start+minimum));
+  if(start===windowStart&&end===(windowEnd??max))return;
+  windowStart=start;windowEnd=end;windowEditing=true;windowPreview=true;windowGeneration++;cursorElapsed=null;queueCharts();
+}
+function commitWindow(){if(!windowEditing)return;windowEditing=false;windowRefreshPending=true;renderCharts();loadDetail(true,true);}
+const windowSurface=$('statistics-window-gesture');let rangePointer=null;
+function rangeTime(clientX){const rect=$('statistics-window-slider').getBoundingClientRect(),ratio=Math.max(0,Math.min(1,(clientX-rect.left-22)/(rect.width-44))),max=chartEnd();return ratio===1?max:Math.min(max,Math.round(ratio*max/1000)*1000);}
+windowSurface.addEventListener('pointerdown',event=>{
+  if(event.button!==0)return;
+  const at=rangeTime(event.clientX),end=windowEnd??chartEnd(),id=Math.abs(at-windowStart)<Math.abs(at-end)?'statistics-window-start':'statistics-window-end';
+  rangePointer={id:event.pointerId,input:id,x:event.clientX,y:event.clientY,mode:event.pointerType==='touch'?null:'adjust'};windowSurface.setPointerCapture(event.pointerId);$(id).focus({preventScroll:true});
+  if(rangePointer.mode){event.preventDefault();adjustWindow(id,at);}
+});
+windowSurface.addEventListener('pointermove',event=>{
+  if(rangePointer?.id!==event.pointerId)return;
+  const dx=Math.abs(event.clientX-rangePointer.x),dy=Math.abs(event.clientY-rangePointer.y);
+  if(!rangePointer.mode){if(Math.max(dx,dy)<8)return;rangePointer.mode=dx>dy*1.2?'adjust':'scroll';}
+  if(rangePointer.mode==='adjust'){event.preventDefault();adjustWindow(rangePointer.input,rangeTime(event.clientX));}
+});
+windowSurface.addEventListener('pointerup',event=>{if(rangePointer?.id!==event.pointerId)return;if(rangePointer.mode!=='scroll')adjustWindow(rangePointer.input,rangeTime(event.clientX));rangePointer=null;commitWindow();});
+for(const name of ['pointercancel','lostpointercapture'])windowSurface.addEventListener(name,()=>{rangePointer=null;commitWindow();});
+for(const input of [$('statistics-window-start'),$('statistics-window-end')]){
+  input.addEventListener('input',()=>adjustWindow(input.id,Number(input.value)));input.addEventListener('change',commitWindow);input.addEventListener('blur',commitWindow);
+  input.addEventListener('keydown',event=>{
+    const delta={ArrowLeft:-1000,ArrowDown:-1000,ArrowRight:1000,ArrowUp:1000,PageDown:-10000,PageUp:10000}[event.key];
+    if(delta==null&&!['Home','End'].includes(event.key))return;event.preventDefault();
+    adjustWindow(input.id,event.key==='Home'?0:event.key==='End'?chartEnd():Number(input.value)+delta);
+  });input.addEventListener('keyup',commitWindow);
+}
+$('statistics-window-reset').onclick=()=>{windowStart=0;windowEnd=null;windowGeneration++;cursorElapsed=null;windowPreview=true;windowEditing=true;commitWindow();};
+function saveMetrics(){try{localStorage.setItem(metricPreference,JSON.stringify(chartMetrics));}catch(_){}renderCharts();}
+const metricNames={net_power_w:'功率',current_ma:'电流',voltage_mv:'电压',soc:'电量',temp_c:'温度'};
+for(const [index,position] of ['upper','lower'].entries()){const choices=$('statistics-'+position+'-metric');for(const [key,label] of Object.entries(metricNames)){const button=el('button',label);button.type='button';button.dataset.metric=key;button.setAttribute('aria-pressed',String(chartMetrics[index]===key));button.onclick=()=>{if(chartMetrics[index]===key)return;chartMetrics[index]=key;saveMetrics();};choices.append(button);}}
+$('statistics-swap').onclick=()=>{chartMetrics.reverse();saveMetrics();};
+function setExpanded(value){
+  if(expanded===value)return;if(value)expandedScroll=$('content').scrollTop;
+  expanded=value;document.body.classList.toggle('stats-chart-expanded',value);const card=$('statistics-chart-card');card.classList.toggle('is-expanded',value);
+  const button=$('statistics-expand');button.disabled=false;button.setAttribute('aria-expanded',String(value));button.querySelector('span').textContent=value?'收起':'展开';button.querySelector('path').setAttribute('d',value?'m6 6 12 12M6 18 18 6':'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5');
+  if(value)card.scrollTop=0;else requestAnimationFrame(()=>{$('content').scrollTop=expandedScroll;button.focus({preventScroll:true});});queueCharts();
+}
+function closeExpanded(){if(!expanded||$('statistics-expand').disabled)return;if(history.state?.chargeGuardStatisticsExpanded){$('statistics-expand').disabled=true;history.back();}else setExpanded(false);}
+$('statistics-expand').onclick=()=>{if(expanded){closeExpanded();return;}history.pushState({...history.state,chargeGuardStatisticsExpanded:true},'');setExpanded(true);};
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&expanded&&!dialog.open){event.preventDefault();event.stopPropagation();closeExpanded();}},true);
+new ResizeObserver(queueCharts).observe(touch);
 for(const button of document.querySelectorAll('[data-stat-period]'))button.onclick=()=>{period=button.dataset.statPeriod;cursorElapsed=null;groupButtons('[data-stat-period]',period);renderCharts();};
 for(const button of document.querySelectorAll('[data-stat-range]'))button.onclick=()=>{if(button.dataset.statRange==='custom'){openFilter(true);return;}range=button.dataset.statRange;filterGeneration++;items=[];listLoaded=false;renderHistory();loadList();};
 for(const key of ['current','history'])$('statistics-tab-'+key).onclick=()=>setView(key);
@@ -328,6 +465,7 @@ dialog.addEventListener('cancel',event=>{event.preventDefault();dialog.close();}
 dialog.addEventListener('close',()=>{backdropPress=false;dialogKind='';if(dialogHistory){dialogHistory=false;if(history.state?.chargeGuardStatisticsDialog)history.back();}});
 window.addEventListener('popstate',()=>{
   if(dialogHistory){dialogHistory=false;if(dialog.open)dialog.close();return;}
+  if(expanded&&!history.state?.chargeGuardStatisticsExpanded){setExpanded(false);return;}
   if(returnAfterDialog&&!history.state?.chargeGuardStatisticsDialog){returnAfterDialog=false;leaveSubview();return;}
   if(viewHistory&&!history.state?.chargeGuardStatisticsView){viewHistory=false;setView(returnView,false);}
 });

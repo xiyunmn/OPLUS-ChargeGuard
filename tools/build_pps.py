@@ -9,6 +9,16 @@ import hashlib,json,pathlib,struct,subprocess,tarfile
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 KERNEL=ROOT/'kernel'
 
+def write_recovery_anchors(path):
+    profile=json.loads((KERNEL/'pps-recovery-target.json').read_text())
+    text='static const struct { const char *symbol; u32 kcfi, words[3]; } rec_anchors[] = {\n'
+    for name,a in profile['anchors'].items():
+        text+=' {"oplus_chg_v2:%s",0x%08x,{%s}},\n'%(name,a['kcfi'],','.join('0x%08x'%word for word in a['entry']))
+    text+='};\nstatic const struct { const char *symbol; unsigned offset; u32 word; } rec_layout_anchors[] = {\n'
+    for a in profile['layout_anchors']:
+        text+=' {"oplus_chg_v2:%s",0x%x,0x%08x},\n'%(a['symbol'],a['offset'],a['word'])
+    path.write_text(text+'};\n',encoding='ascii')
+
 def sections(path):
     data=path.read_bytes()
     assert data[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<H',data,18)[0]==183
@@ -58,7 +68,9 @@ def build(llvm,output,name="charge_guard_pps",profile_name="pjz110-target.json",
            '-ffile-prefix-map='+str(ROOT)+'=/src/charge-guard']
     for inc in includes:flags+=['-I',str(headers/inc)]
     flags+=['-I',str(work)]
-    if name=='charge_guard_power':
+    if name=='charge_guard_pps':
+        write_recovery_anchors(work/'pps_recovery_anchors.h')
+    elif name=='charge_guard_power':
         from build_power import write_anchors
         write_anchors(profile,work/'power_anchors.h')
     elif name=='charge_guard_screen':

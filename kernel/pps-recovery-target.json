@@ -1,0 +1,97 @@
+{
+  "source_driver_sha256": "b04f11538874d192bd571c9516050dc109f6615f417590b41b38704d0f96b3f9",
+  "source": "Current firmware callable interfaces and live layout anchors; no model or whole-image admission gate.",
+  "anchors": {
+    "oplus_mms_get_by_name": {
+      "kcfi": 1141256189,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_mms_get_item_data": {
+      "kcfi": 2997018989,
+      "entry": [
+        3573752639,
+        2847702013,
+        2835439608
+      ]
+    },
+    "oplus_mms_put": {
+      "kcfi": 4266203396,
+      "entry": [
+        3573752639,
+        2847898621,
+        2432697341
+      ]
+    },
+    "oplus_mms_get_drvdata": {
+      "kcfi": 15505505,
+      "entry": [
+        4181782528,
+        3596551104,
+        3573752639
+      ]
+    },
+    "find_votable": {
+      "kcfi": 1596243116,
+      "entry": [
+        3573752639,
+        2847767549,
+        2835437558
+      ]
+    },
+    "get_effective_result": {
+      "kcfi": 2066281249,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_cpa_request": {
+      "kcfi": 3048629804,
+      "entry": [
+        3573752639,
+        2847767549,
+        4177529845
+      ]
+    },
+    "oplus_cpa_protocol_check_enable": {
+      "kcfi": 208349933,
+      "entry": [
+        3573752639,
+        2847833085,
+        4177529843
+      ]
+    }
+  },
+  "layout_anchors": [
+    {
+      "symbol": "oplus_pps_charge_allow_check",
+      "offset": 148,
+      "word": 3108748904
+    },
+    {
+      "symbol": "oplus_pps_charge_allow_check",
+      "offset": 204,
+      "word": 3108748904
+    },
+    {
+      "symbol": "oplus_pps_charge_allow_check",
+      "offset": 208,
+      "word": 3108604521
+    },
+    {
+      "symbol": "oplus_pps_charge_allow_check",
+      "offset": 220,
+      "word": 3108610665
+    },
+    {
+      "symbol": "oplus_pps_charge_allow_check",
+      "offset": 292,
+      "word": 3108748904
+    }
+  ]
+}

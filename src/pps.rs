@@ -10,6 +10,7 @@ pub const ENABLED: &str = "/sys/module/charge_guard_pps/parameters/enabled";
 pub const STATUS: &str = "/sys/module/charge_guard_pps/parameters/status";
 pub const DIAGNOSTICS: &str = "/sys/module/charge_guard_pps/parameters/diagnostics";
 pub const EVENTS: &str = "/sys/module/charge_guard_pps/parameters/events";
+pub const RECOVERY: &str = "/sys/module/charge_guard_pps/parameters/recovery";
 pub const DRIVER_ID: &str = "pjz110-f04-205fb7eb-v1";
 pub const DRIVER_IMAGE: &str = "205fb7ebdd5d12438fbd40e7432d12c034929c629a8657ca17f38d50de7c63ce";
 pub const KERNEL_RELEASE: &str = "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k";
@@ -23,6 +24,41 @@ pub struct Status {
     pub observations: u64,
     pub diagnostics: Option<Diagnostics>,
     pub diagnostic_error: Option<String>,
+    pub recovery: Option<Recovery>,
+    pub recovery_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recovery {
+    pub api: u32,
+    pub ready: bool,
+    pub state: String,
+    pub error: i32,
+    pub checked_ms: u64,
+    pub temperature_decic: i32,
+    pub real_type: i32,
+    pub protocol: i32,
+    pub attempts: u32,
+    pub successes: u32,
+    pub last_request_ms: u64,
+    pub blocking_voter: String,
+}
+
+pub fn parse_recovery(raw: &str) -> Result<Recovery> {
+    let r: Recovery =
+        serde_json::from_str(raw).map_err(|e| format!("pps_recovery_json:{e}"))?;
+    if r.api != 1
+        || !matches!(r.state.as_str(), "off" | "observing" | "active" | "waiting_cool"
+            | "waiting_conditions" | "settling" | "requesting" | "recovered"
+            | "retry_exhausted" | "unsupported" | "retired" | "request_failed")
+        || !matches!(r.protocol, -1 | 0 | 3 | 4)
+        || r.real_type < -1
+        || !valid_voter(&r.blocking_voter)
+    {
+        return Err("pps_recovery_fields".into());
+    }
+    Ok(r)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -171,14 +207,70 @@ fn append_diagnostic(h: &Hardware, event: &str, detail: Value, detailed: bool) -
     Ok(())
 }
 
+#[derive(Serialize, Deserialize)]
+struct RecoverySnapshot {
+    boot_id: String,
+    generation_ms: Option<u64>,
+    state: String,
+    attempts: u32,
+    blocking_voter: String,
+    error: i32,
+}
+
+fn capture_recovery(h: &Hardware) -> Result<()> {
+    if !h.present(RECOVERY)? {
+        return Ok(());
+    }
+    let helper = status(h)?;
+    let r = helper.recovery.ok_or_else(|| {
+        helper
+            .recovery_error
+            .unwrap_or_else(|| "pps_recovery_unavailable".into())
+    })?;
+    let snapshot = RecoverySnapshot {
+        boot_id: h.read("/proc/sys/kernel/random/boot_id")?,
+        generation_ms: helper.diagnostics.map(|d| d.generation_ms),
+        state: r.state.clone(),
+        attempts: r.attempts,
+        blocking_voter: r.blocking_voter.clone(),
+        error: r.error,
+    };
+    let path = h.state().join("pps-recovery-snapshot.json");
+    if path.exists() {
+        let previous: RecoverySnapshot = storage::load(&path, 4096)?;
+        if previous.boot_id == snapshot.boot_id
+            && previous.generation_ms == snapshot.generation_ms
+            && previous.state == snapshot.state
+            && previous.attempts == snapshot.attempts
+            && previous.blocking_voter == snapshot.blocking_voter
+            && previous.error == snapshot.error
+        {
+            return Ok(());
+        }
+    }
+    append_diagnostic(
+        h,
+        "pps_recovery_state",
+        json!(r),
+        crate::runtime::config(h).is_ok_and(|c| c.detailed_logging),
+    )?;
+    storage::json(&path, &snapshot)
+}
+
 /// Called only by the existing PPS maintenance/restore paths. A cursor is
 /// acknowledged after the corresponding log writes; readers never consume the
 /// kernel ring. Stable event IDs identify replay after a cursor-save interruption.
 pub fn capture_events(h: &Hardware) -> Result<()> {
+    let _lock = storage::Lock::take(&h.state().join("pps-events.lock"))?;
+    let events = capture_native_events(h);
+    let recovery = capture_recovery(h);
+    events.and(recovery)
+}
+
+fn capture_native_events(h: &Hardware) -> Result<()> {
     if !h.present(EVENTS)? {
         return Ok(());
     } // Old helpers remain restorable.
-    let _lock = storage::Lock::take(&h.state().join("pps-events.lock"))?;
     let batch = parse_events(&h.read(EVENTS)?)?;
     let path = h.state().join("pps-events-cursor.json");
     let boot_id = h.read("/proc/sys/kernel/random/boot_id")?;
@@ -275,6 +367,8 @@ pub fn parse_status(raw: &str) -> Result<Status> {
             .map_err(|_| "pps_status_invalid_observations")?,
         diagnostics: None,
         diagnostic_error: None,
+        recovery: None,
+        recovery_error: None,
     })
 }
 
@@ -290,6 +384,16 @@ pub fn status(h: &Hardware) -> Result<Status> {
         Ok(d) => status.diagnostics = d,
         Err(e) => status.diagnostic_error = Some(e),
     }
+    let recovery = (|| -> Result<Option<Recovery>> {
+        if !h.present(RECOVERY)? {
+            return Ok(None);
+        }
+        parse_recovery(&h.read(RECOVERY)?).map(Some)
+    })();
+    match recovery {
+        Ok(r) => status.recovery = r,
+        Err(e) => status.recovery_error = Some(e),
+    }
     Ok(status)
 }
 
@@ -302,6 +406,44 @@ pub fn presentation(s: &Status) -> (&'static str, String) {
     if !s.enabled {
         return ("pps_off", "辅助开关未启用".into());
     }
+    let data_note = if s.diagnostics.as_ref().is_some_and(|d| {
+        d.ready && (d.support == 0 || d.state == "data_unavailable")
+    }) {
+        "；PPS Status 数据通道不可用"
+    } else {
+        ""
+    };
+    if let Some(r) = &s.recovery {
+        let (state, message) = if r.state == "retired" {
+            ("pps_retired", "驱动已退出，辅助功能已停止")
+        } else if !r.ready {
+            ("pps_recovery_unavailable", "自动恢复接口未就绪")
+        } else {
+            match r.state.as_str() {
+                "off" => ("pps_recovery_off", "自动恢复维护已关闭"),
+                "observing" => ("pps_recovery_observing", "正在观察原厂充电状态"),
+                "active" => ("pps_recovery_active", "当前实际处于 PPS 充电"),
+                "waiting_cool" => ("pps_recovery_waiting_cool", "等待真实电池温度降至恢复条件"),
+                "waiting_conditions" => ("pps_recovery_waiting_conditions", "等待原厂 PPS 准入条件"),
+                "settling" => ("pps_recovery_settling", "PPS 退出后等待协议稳定"),
+                "requesting" => ("pps_recovery_requesting", "已请求原厂重新评估，等待实际进入 PPS"),
+                "recovered" => ("pps_recovery_recovered", "已确认重新进入 PPS 充电"),
+                "retry_exhausted" => ("pps_recovery_retry_exhausted", "本轮恢复尝试已用尽，保留原厂充电状态"),
+                "retired" => ("pps_retired", "驱动已退出，辅助功能已停止"),
+                "request_failed" => ("pps_recovery_request_failed", "原厂 PPS 重入请求失败，请查看后端详情"),
+                _ => ("pps_recovery_unavailable", "当前固件未适配自动恢复接口"),
+            }
+        };
+        return (state, format!("{message}{data_note}"));
+    }
+    if s.recovery_error.is_some() {
+        return ("pps_recovery_unavailable", format!("自动恢复状态读取失败，请查看后端详情{data_note}"));
+    }
+    let (state, message) = diagnostic_presentation(s);
+    (state, format!("{message}；当前辅助模块不具备自动恢复能力"))
+}
+
+fn diagnostic_presentation(s: &Status) -> (&'static str, String) {
     let Some(d) = s.diagnostics.as_ref().filter(|d| d.ready) else {
         return (
             "pps_diagnostic_unavailable",
@@ -368,6 +510,9 @@ pub fn prepare(h: &Hardware) -> Result<()> {
     let s = status(h)?;
     if !s.ready || s.retiring {
         return Err("pps_driver_retired_or_not_ready".into());
+    }
+    if s.enabled && h.present(RECOVERY)? {
+        h.write(RECOVERY, "1")?;
     }
     Ok(())
 }

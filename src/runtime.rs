@@ -948,6 +948,24 @@ pub fn stop(h: &Hardware) -> Result<Value> {
 // Presentation only: the OEM UI protocol can include keep/override states.
 // Never use this field for power-limit control or infer PPS from USB_PD_PPS.
 pub(crate) fn charging_protocol(h: &Hardware) -> Value {
+    if let Ok(helper) = crate::pps::status(h) {
+        if helper.ready && helper.enabled && !helper.retiring {
+            if let Some(r) = helper.recovery.filter(|r| {
+                r.ready && r.checked_ms > 0
+                    && now_ms().checked_sub(r.checked_ms).is_some_and(|age| age <= 6000)
+            }) {
+                let label = match r.protocol {
+                    3 => Some("PPS"),
+                    4 => Some("PD"),
+                    _ => None,
+                };
+                if let Some(label) = label {
+                    return json!({"label":label,"source":crate::pps::RECOVERY,
+                        "raw":r.protocol,"checked_boottime_ms":r.checked_ms});
+                }
+            }
+        }
+    }
     const OEM: &str = "/sys/class/oplus_chg/common/protocol_type";
     let raw = h.read(OEM).ok();
     let label = match raw.as_deref() {

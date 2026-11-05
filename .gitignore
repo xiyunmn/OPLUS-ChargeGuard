@@ -70,6 +70,8 @@
 !/kernel/
 !/kernel/charge_guard_pps.c
 !/kernel/pps_diagnostics.h
+!/kernel/pps_recovery.h
+!/kernel/pps-recovery-target.json
 !/kernel/pjz110-headers.tar.xz
 !/kernel/pjz110-symbols.json
 !/kernel/pjz110-target.json

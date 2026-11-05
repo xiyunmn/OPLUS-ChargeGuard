@@ -27,12 +27,12 @@ struct diag_event {
     char voter[DIAG_VOTER];
 };
 static struct {
-    bool ready, charging, session_used, raw_valid;
+    bool ready, charging, ever_charging, session_used, raw_valid;
     int error, support, cp_ibus, rc;
     unsigned phase, exit;
     u32 raw;
     u64 generation_ms, seq, queries, successes, failures, uses, resets;
-    u64 query_ms, used_ms;
+    u64 query_ms, used_ms, exit_ms, last_reset_ms, last_charging_ms;
     char disable_vote[DIAG_VOTER], not_allow_vote[DIAG_VOTER], exit_voter[DIAG_VOTER];
     struct diag_event events[DIAG_EVENTS];
 } diag = { .support = -1, .cp_ibus = -1,
@@ -75,10 +75,16 @@ static void diag_support(int value, unsigned phase)
 }
 static void diag_charging(int value)
 {
+    if (value && !diag.ever_charging) {
+        diag.ever_charging = true;
+        diag.last_charging_ms = diag_now();
+    }
     if (diag.charging == !!value) return;
     diag.charging = !!value;
     diag.session_used = false;
     if (value) {
+        diag.ever_charging = true;
+        diag.last_charging_ms = diag_now();
         diag.exit = 0;
         diag_voter(diag.exit_voter, "none");
     }
@@ -184,6 +190,7 @@ static int diag_pre(struct kprobe *probe, struct pt_regs *regs)
          * payload=0x7f Hard Reset. No inference about which side sent it. */
         if (regs->regs[21] == 16 && msg && READ_ONCE(msg[2]) == 7 && READ_ONCE(msg[3]) == 0x7f) {
             diag.resets++; diag.session_used = false;
+            diag.last_reset_ms = diag_now();
             diag_emit(DIAG_HARD_RESET, 0, 0, 0, NULL);
         }
         goto out;
@@ -214,6 +221,7 @@ static int diag_pre(struct kprobe *probe, struct pt_regs *regs)
                   (s32)regs->regs[2], (const char *)regs->regs[3]); break;
     case DP_SOFT_EXIT: case DP_FORCE_EXIT:
         diag.exit = point == DP_SOFT_EXIT ? 1 : 2;
+        diag.exit_ms = diag_now();
         diag.session_used = false;
         diag_voter(diag.exit_voter, strcmp(diag.disable_vote, "none") ? diag.disable_vote :
                    strcmp(diag.not_allow_vote, "none") ? diag.not_allow_vote : "unknown");

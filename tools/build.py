@@ -10,7 +10,7 @@ SOURCE=('Cargo.toml','Cargo.lock','build.rs','rust-toolchain.toml','.gitattribut
 BUILD_SUPPORT=('tools/build.py','tools/ci.py','tools/cooling_events.c','tools/build_pps.py','tools/build_power.py','kernel/charging-contracts.json',
                'tools/build_screen.py','kernel/charge_guard_screen.c','kernel/screen-target.json','kernel/screen-symbols.json',
                'kernel/charge_guard_power.c','kernel/power_policy.h','kernel/pjz110-power-target.json','kernel/pjz110-power-symbols.json',
-               'kernel/charge_guard_pps.c','kernel/pps_diagnostics.h','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
+               'kernel/charge_guard_pps.c','kernel/pps_diagnostics.h','kernel/pps_recovery.h','kernel/pps-recovery-target.json','kernel/pjz110-headers.tar.xz','kernel/pjz110-symbols.json','kernel/pjz110-target.json',
                '.github/workflows/beta.yml','.github/workflows/release.yml',
                '.github/actions/build/action.yml')
 STAMP=(2026,1,1,0,0,0)

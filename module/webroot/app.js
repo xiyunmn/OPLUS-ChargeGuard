@@ -6,6 +6,8 @@ const tempKeys=['batt_temp_mc','cpu_temp_mc','gpu_temp_mc','ddr_temp_mc','charge
 const counts=new Intl.NumberFormat('en-US');
 const stateNames={applied:'已应用',unsupported:'不支持',unavailable:'不可用',retrying:'待重试',restored:'已恢复',restore_pending:'恢复待处理',repair_wait:'等待修复窗口',unverified:'能力待验证',blocked:'已暂停，需检查后重新保存',waiting_protocol:'协议未选中或尚未进入快充',waiting_voltage:'等待有效电压',waiting_charge:'等待有线充电',data_error:'状态异常',conflict:'控制冲突',retired:'辅助已停止',pps_waiting:'等待 PPS',pps_armed:'已设置，暂无辅助证据',pps_used:'已参与电流判断',pps_data_unavailable:'原厂停用数据通道',pps_exited:'已退出 PPS',pps_diagnostic_unavailable:'诊断不可用',pps_off:'辅助未启用',pps_retired:'辅助已停止'};
 const profileNames={charging:'充电独立预设',global:'全局温控预设',idle:'未启用预设'};
+const recoveryNames={off:'自动恢复已关闭',observing:'观察原厂充电状态',active:'当前实际 PPS',waiting_cool:'等待降温恢复',waiting_conditions:'等待原厂准入条件',settling:'等待协议稳定',requesting:'已请求，等待进入 PPS',recovered:'已确认恢复 PPS',retry_exhausted:'本轮尝试已用尽',unsupported:'自动恢复未适配',retired:'辅助已停止',request_failed:'重入请求失败',unavailable:'自动恢复状态不可用'};
+for(const [key,label] of Object.entries(recoveryNames))stateNames['pps_recovery_'+key]=label;
 const chargeNames={Charging:'充电中',Full:'已充满',Discharging:'使用电池','Not charging':'未充电'};
 const modeNames={event:'纯事件',event_check:'事件＋周期核验',loop:'周期写入',dormant:'目标不存在',blocked:'能力待验证'};
 let requestEpoch=0,pollGeneration=0,pollTimer=null,pollingActive=false,viewOpen=true,startupPresented=false;
@@ -252,7 +254,7 @@ function screenInfo(op){
   try{const info=JSON.parse(op.detail);return info&&typeof info.message==='string'&&info.helper?info:null;}catch{return null;}
 }
 function screenValue(value){return value===0?'息屏':value===1?'亮屏':'未知';}
-function stateClass(ops){return ops.some(o=>['retrying','restore_pending','repair_wait','unverified','pps_diagnostic_unavailable','pps_data_unavailable','pps_exited','pps_retired','data_error','conflict','retired'].includes(o.state)||ppsInfo(o)?.log_error)?'warn':ops.every(o=>['applied','pps_used'].includes(o.state))?'good':'';}
+function stateClass(ops){return ops.some(o=>['retrying','restore_pending','repair_wait','unverified','pps_diagnostic_unavailable','pps_data_unavailable','pps_exited','pps_retired','pps_recovery_unavailable','pps_recovery_request_failed','pps_recovery_retry_exhausted','data_error','conflict','retired'].includes(o.state)||ppsInfo(o)?.log_error||(ppsInfo(o)?.helper?.diagnostics?.support===0&&!ppsInfo(o)?.helper?.recovery?.ready))?'warn':ops.every(o=>['applied','pps_used','pps_recovery_active','pps_recovery_recovered'].includes(o.state))?'good':'';}
 function groupMode(group){
   if(group.items.every(o=>o.state==='restored'))return '已恢复';
   if(group.items.every(o=>!o.maintenance_mode))return group.items.some(o=>o.state==='restore_pending')?'等待恢复':'—';
@@ -284,6 +286,12 @@ function paintBackendNode(record,op,multiple){
   const pps=ppsInfo(op),d=pps?.helper?.diagnostics;
   if(pps){
     pairs.push(['工作回调命中',count(pps.helper.observations)]);
+    const r=pps.helper.recovery;
+    if(r){
+      pairs.push(['自动恢复状态',recoveryNames[r.state]||r.state],['恢复尝试 / 确认成功',count(r.attempts)+' / '+count(r.successes)],['真实电池温度',r.temperature_decic===-10000?'未知':(r.temperature_decic/10).toFixed(1)+'℃'],['恢复阻断票',r.blocking_voter==='none'?'无':r.blocking_voter||'未知'],['恢复检查（开机后）',r.checked_ms?uptime(r.checked_ms):'尚未检查'],['最近重入请求（开机后）',r.last_request_ms?uptime(r.last_request_ms):'尚无请求'],['恢复错误码',String(r.error)]);
+    }else{
+      pairs.push(['自动恢复能力',pps.helper.recovery_error||'当前辅助模块不具备自动恢复能力']);
+    }
     if(d){
       pairs.push(['查询 / 返回成功 / 失败',count(d.queries)+' / '+count(d.successes)+' / '+count(d.failures)],['实际参与判断',count(d.uses)+' 次'],['最近查询（开机后）',d.query_ms?uptime(d.query_ms):'尚无查询'],['最近返回码',d.queries?String(d.rc):'—'],['最近原始返回值',d.raw==null?'—':'0x'+Number(d.raw).toString(16)],['退出时生效票',d.exit_voter||'未知']);
     }
@@ -297,7 +305,7 @@ function paintBackendNode(record,op,multiple){
   const source={property_wait:'服务状态通知',node_inotify:'inotify','mount_poll+inotify':'挂载与文件通知','thermal_tracepoint+thermal_netlink+inotify':'thermal / netlink / inotify'}[op.event_source]||op.event_source;
   const reason=[source,op.maintenance_reason].filter(Boolean).join(' · ');setText(record.reason,reason);record.reason.hidden=!reason;
   const detail={node_repair_rate_limited:'已检测到漂移；到修复截止时间会自动再次核验。',shell_driver_unverified:'尚未匹配经过验证的驱动身份，shell-temp 暂停写入。',restore_shell_capability_unverified:'原驱动能力未确认，恢复记录保留，暂不写入恢复值。',write_accepted_aggregate_readback:'槽位已验证有效，写入已接受；回读仅是所有槽位的最大值，不能逐槽核验。',write_accepted_no_readback:'接口写入已完成；该接口不提供可比对的回读。',write_accepted_readback_masked_by_switch:'写入已完成；显示值受禁限开关影响，不能验证内部请求。'}[op.detail]||op.detail;
-  const readable=screen?screen.message:pps?pps.message+(pps.helper.diagnostic_error?' · '+pps.helper.diagnostic_error:''):(op.detail?.startsWith('pps_diagnostic_log_failed:')?'充电控制已恢复；PPS诊断日志保存失败：'+op.detail.slice('pps_diagnostic_log_failed:'.length):detail);
+  const readable=screen?screen.message:pps?pps.message+(pps.helper.diagnostic_error?' · '+pps.helper.diagnostic_error:'')+(pps.helper.recovery_error?' · '+pps.helper.recovery_error:''):(op.detail?.startsWith('pps_diagnostic_log_failed:')?'充电控制已恢复；PPS诊断日志保存失败：'+op.detail.slice('pps_diagnostic_log_failed:'.length):detail);
   setText(record.detail,readable);record.detail.hidden=!readable;setText(record.pre,JSON.stringify(op,null,2));
 }
 function renderBackends(data){
@@ -327,10 +335,11 @@ function renderBackends(data){
 }
 
 const logNames={screen_fast_state:'亮屏快充状态',pps_diagnostic:'PPS 辅助事件',pps_diagnostic_gap:'PPS 诊断记录缺口',detailed_logging_changed:'详细日志设置',cooling_listener_changed:'Cooling 监听状态',maintenance_mode_changed:'维护模式更新',horae_camera_restore:'相机优先恢复 Horae',charge_listener:'充电事件监听',charge_changed:'充电状态变化',maintenance:'后端维护',profile_changed:'预设切换',config_changed:'设置已保存',camera_state:'智能 Horae',worker_exit:'核心进程退出',watchdog_wait:'等待自动重启',spawn_failed:'启动失败',worker_stop_timeout:'停止超时',status_write_failed:'状态记录失败'};
-function isError(e){return e.event==='pps_diagnostic_gap'||e.event==='pps_diagnostic'&&(e.detail?.kind==='query'&&e.detail?.result<0||e.detail?.kind==='support'&&e.detail?.result===0||e.detail?.kind==='hard_reset')||/failed|timeout|_error$/.test(e.event||'')||e.event==='screen_fast_state'&&['data_error','conflict','restore_pending','unsupported','retired'].includes(e.detail?.state)||Number(e.detail?.failures)>0||!!e.detail?.error||(e.event==='worker_exit'&&!e.detail?.requested);}
+logNames.pps_recovery_state='PPS 自动恢复状态';
+function isError(e){return e.event==='pps_diagnostic_gap'||e.event==='pps_diagnostic'&&(e.detail?.kind==='query'&&e.detail?.result<0||e.detail?.kind==='support'&&e.detail?.result===0||e.detail?.kind==='hard_reset')||e.event==='pps_recovery_state'&&['retry_exhausted','request_failed','unsupported'].includes(e.detail?.state)||/failed|timeout|_error$/.test(e.event||'')||e.event==='screen_fast_state'&&['data_error','conflict','restore_pending','unsupported','retired'].includes(e.detail?.state)||Number(e.detail?.failures)>0||!!e.detail?.error||(e.event==='worker_exit'&&!e.detail?.requested);}
 function logTone(e){return isError(e)?'error':/camera|horae/.test(e.event||'')?'camera':/cooling/.test(e.event||'')?'cooling':'config';}
 function logSummary(e){
-  const d=e.detail;if(typeof d==='string')return d;if(!d||typeof d!=='object')return '查看完整记录';if(d.error&&e.event!=='screen_fast_state')return String(d.error);
+  const d=e.detail;if(typeof d==='string')return d;if(!d||typeof d!=='object')return '查看完整记录';if(e.event==='pps_recovery_state')return (recoveryNames[d.state]||d.state)+' · 尝试 '+count(d.attempts)+' / 确认成功 '+count(d.successes)+(d.blocking_voter&&!['none','unknown'].includes(d.blocking_voter)?' · '+d.blocking_voter:'')+(d.error?' · 错误 '+d.error:'');if(d.error&&e.event!=='screen_fast_state')return String(d.error);
   switch(e.event){
     case 'screen_fast_state':return (stateNames[d.state]||d.state)+' · 原始'+screenValue(d.original_led)+' → 充电判断'+screenValue(d.effective_led)+(d.error?' · 错误 '+d.error:'');
     case 'pps_diagnostic_gap':return '缺失 '+count(d.lost)+' 条未读事件；本次记录不能还原完整顺序';
@@ -510,7 +519,7 @@ async function action(verb){
   catch(error){message(error.message,true);}finally{busy=false;controls();await refresh();}
 }
 
-for(const slider of document.querySelectorAll('input[type=range]')){
+for(const slider of document.querySelectorAll('input[type=range]:not([data-stat-input])')){
   const wrap=element('div',null,'range-wrap'),surface=element('div',null,'range-gesture');surface.setAttribute('aria-hidden','true');slider.before(wrap);wrap.append(slider,surface);
   let gesture=null;
   function setValue(value){const min=Number(slider.min),max=Number(slider.max),step=Number(slider.step)||1,next=Math.round((Math.max(min,Math.min(max,value))-min)/step)*step+min;if(next!==Number(slider.value)){slider.value=String(next);slider.dispatchEvent(new Event('input',{bubbles:true}));}}

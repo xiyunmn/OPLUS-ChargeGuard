@@ -36,6 +36,10 @@ runs:
     - name: Check source package scope
       shell: bash
       run: python tools/build.py audit
+    - name: Check WebUI JavaScript syntax
+      shell: bash
+      run: |
+        for file in module/webroot/*.js; do node --check "$file"; done
     - name: Build and validate installation ZIP
       shell: bash
       env:

@@ -8,6 +8,7 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/jiffies.h>
 #include <linux/power_supply.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
@@ -19,6 +20,7 @@
 #define LED_ITEM 16
 #define TOPIC_DEVICE_OFFSET 488
 #define ITEM_SIZE 128
+#define RESTORE_RETRIES 3
 struct oplus_mms;
 struct mms_subscribe;
 struct mms_msg;
@@ -39,6 +41,10 @@ static void *led_getter;
 static DEFINE_MUTEX(lock);
 static DEFINE_RAW_SPINLOCK(observation_lock);
 static struct delayed_work work;
+static struct delayed_work restore_work;
+static unsigned int restore_attempts;
+static unsigned long restore_due;
+static bool restore_scheduled;
 static bool ready, enabled, opened, active, retiring, stopping;
 static bool needs_restore, self_held, hook_registered, common_unbinding;
 static int original_led = -1, effective_led = -1, last_error;
@@ -175,6 +181,8 @@ static int publish(bool covering)
 static void discharge_obligation(void)
 {
     needs_restore = false;
+    restore_scheduled = false;
+    restore_attempts = 0;
     if (self_held) {
         self_held = false;
         module_put(THIS_MODULE);
@@ -189,6 +197,15 @@ static int restore(void)
     if (rc) {
         phase = "restore_pending";
         last_error = rc;
+        /* Retry only this obligation, independently of enabled/session work.
+         * Repeated off/close requests must not restart the finite budget or
+         * postpone an already queued retry. Keep our reference on exhaustion. */
+        if (!stopping && !common_unbinding && topics[0] && led_item &&
+            restore_attempts < RESTORE_RETRIES && !restore_scheduled) {
+            restore_scheduled = true;
+            restore_due = jiffies + (HZ << restore_attempts);
+            mod_delayed_work(system_wq, &restore_work, HZ << restore_attempts);
+        }
         return rc;
     }
     discharge_obligation();
@@ -266,6 +283,30 @@ static void release_common(void)
     if (topics[0]) { cg_put(topics[0]); topics[0] = NULL; }
     led_item = NULL;
 }
+static void retry_restore(struct work_struct *unused)
+{
+    unsigned long now;
+    mutex_lock(&lock);
+    now = jiffies;
+    if (needs_restore && !active && !stopping && !common_unbinding && restore_scheduled &&
+        restore_attempts < RESTORE_RETRIES) {
+        /* A callback left over from an already discharged obligation may
+         * enter after a new one was queued. Do not consume its budget early. */
+        if (time_before(now, restore_due)) {
+            mod_delayed_work(system_wq, &restore_work, restore_due - now);
+            mutex_unlock(&lock);
+            return;
+        }
+        restore_scheduled = false;
+        restore_attempts++;
+        if (!restore()) {
+            phase = retiring ? "retired" : "off";
+            last_error = 0;
+            if (retiring) release_common();
+        }
+    }
+    mutex_unlock(&lock);
+}
 static int bus_event(struct notifier_block *nb, unsigned long action, void *data)
 {
     bool common = data == parents[0];
@@ -297,6 +338,7 @@ static int bus_event(struct notifier_block *nb, unsigned long action, void *data
     if (!needs_restore) { phase = "retired"; last_error = 0; }
     mutex_unlock(&lock);
     cancel_delayed_work_sync(&work);
+    if (common) cancel_delayed_work_sync(&restore_work);
     return NOTIFY_OK;
 }
 static struct notifier_block bus_nb = { .notifier_call = bus_event };
@@ -310,6 +352,7 @@ static int reboot_event(struct notifier_block *nb, unsigned long action, void *d
     if (!needs_restore) { release_common(); phase = "retired"; }
     mutex_unlock(&lock);
     cancel_delayed_work_sync(&work);
+    cancel_delayed_work_sync(&restore_work);
     return NOTIFY_OK;
 }
 static struct notifier_block reboot_nb = { .notifier_call = reboot_event };
@@ -466,6 +509,7 @@ static int __init cg_screen_init(void)
 {
     int rc;
     INIT_DELAYED_WORK(&work, maintain);
+    INIT_DELAYED_WORK(&restore_work, retry_restore);
     rc = bus_register_notifier(&platform_bus_type, &bus_nb);
     if (rc) return rc;
     mutex_lock(&lock);
@@ -513,6 +557,7 @@ static void __exit cg_screen_exit(void)
     power_supply_unreg_notifier(&power_nb);
     bus_unregister_notifier(&platform_bus_type, &bus_nb);
     cancel_delayed_work_sync(&work);
+    cancel_delayed_work_sync(&restore_work);
     mutex_lock(&lock);
     ready = enabled = false;
     set_active(false);

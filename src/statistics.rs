@@ -348,23 +348,26 @@ impl Store {
             let _lock = store.lock()?;
             let index = store.dir.join("index.json");
             let active = store.dir.join("active.json");
-            if !index.exists()
-                || store.closed().is_err()
-                || (active.exists() && store.active().is_err())
-            {
-                Some((snapshot_stamp(&index)?, snapshot_stamp(&active)?))
+            let indexed = index
+                .exists()
+                .then(|| store.closed())
+                .transpose()
+                .ok()
+                .flatten();
+            if indexed.is_none() || (active.exists() && store.active().is_err()) {
+                Some((snapshot_stamp(&index)?, snapshot_stamp(&active)?, indexed))
             } else {
                 None
             }
         };
-        if let Some(stamps) = recovery {
+        if let Some((index_stamp, active_stamp, indexed)) = recovery {
             // Recovery can scan long raw sessions; never hold the writer lock
             // while reading them. Do not publish over a concurrent snapshot.
-            let recovered = store.recover()?;
+            let recovered = store.recover(indexed.as_deref())?;
             let _lock = store.lock()?;
             let index = store.dir.join("index.json");
             let active = store.dir.join("active.json");
-            if stamps != (snapshot_stamp(&index)?, snapshot_stamp(&active)?) {
+            if (index_stamp, active_stamp) != (snapshot_stamp(&index)?, snapshot_stamp(&active)?) {
                 return Err("statistics_changed_during_recovery".into());
             }
             let mut pending = recovered
@@ -384,6 +387,10 @@ impl Store {
                 regular(&active)?;
                 fs::remove_file(&active).map_err(|e| e.to_string())?;
             }
+        }
+        {
+            let _lock = store.lock()?;
+            store.remove_orphans(&store.load()?)?;
         }
         Ok(store)
     }
@@ -421,8 +428,9 @@ impl Store {
         }
         Ok(sessions)
     }
-    fn recover(&self) -> Result<Vec<Session>> {
-        // The index is a reconstructible snapshot. JSONL is the source of truth.
+    fn recover(&self, indexed: Option<&[Session]>) -> Result<Vec<Session>> {
+        // A valid index defines closed-session membership after deletion. Only
+        // recover every raw session when that index itself is unavailable.
         let mut sessions = Vec::new();
         for entry in fs::read_dir(self.dir.join("sessions")).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -462,17 +470,35 @@ impl Store {
                 }
             }
             if let Some(s) = session {
-                sessions.push(s);
+                if s.summary.ended_unix_ms.is_none()
+                    || indexed.is_none_or(|closed| {
+                        closed.iter().any(|old| old.summary.id == s.summary.id)
+                    })
+                {
+                    sessions.push(s);
+                }
             }
         }
         Ok(sessions)
+    }
+    fn remove_orphans(&self, sessions: &[Session]) -> Result<()> {
+        for entry in fs::read_dir(self.dir.join("sessions")).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(id) = name.strip_suffix(".jsonl") {
+                if !sessions.iter().any(|s| s.summary.id == id) {
+                    self.remove_raw(id)?;
+                }
+            }
+        }
+        Ok(())
     }
     fn save_closed(&self, sessions: &[Session]) -> Result<()> {
         let closed = sessions
             .iter()
             .filter(|s| s.summary.ended_unix_ms.is_some())
             .collect::<Vec<_>>();
-        snapshot_atomic(
+        storage::atomic(
             &self.dir.join("index.json"),
             &serde_json::to_vec(&closed).map_err(|e| e.to_string())?,
         )
@@ -506,6 +532,9 @@ impl Store {
                 &serde_json::to_vec(&pending).map_err(|e| e.to_string())?,
             )?;
         } else {
+            // Recovery distinguishes closed deletion orphans from unfinished
+            // recordings by their end row, which must precede durable membership.
+            file.sync_all().map_err(|e| e.to_string())?;
             let mut sessions = self.closed()?;
             if let Some(old) = sessions
                 .iter_mut()
@@ -721,11 +750,8 @@ impl Store {
             .filter(|s| ids.contains(&s.summary.id))
             .map(|s| s.summary.id.clone())
             .collect::<Vec<_>>();
-        for id in &selected {
-            self.remove_raw(id)?;
-        }
         sessions.retain(|s| !selected.contains(&s.summary.id));
-        self.save_closed(&sessions)?;
+        self.commit_removal(&sessions, &selected)?;
         Ok(selected.len())
     }
     pub fn clear(&self) -> Result<usize> {
@@ -736,12 +762,24 @@ impl Store {
             .filter(|s| s.summary.ended_unix_ms.is_some())
             .map(|s| s.summary.id.clone())
             .collect::<Vec<_>>();
-        for id in &ids {
+        sessions.retain(|s| s.summary.ended_unix_ms.is_none());
+        self.commit_removal(&sessions, &ids)?;
+        Ok(ids.len())
+    }
+    fn commit_removal(&self, sessions: &[Session], ids: &[String]) -> Result<()> {
+        // A close interrupted after its index commit may leave an old active
+        // snapshot. Remove it before the durable index commit also syncs this dir.
+        if self.active()?.is_some_and(|s| ids.contains(&s.summary.id)) {
+            let active = self.dir.join("active.json");
+            regular(&active)?;
+            fs::remove_file(active).map_err(|e| e.to_string())?;
+        }
+        self.save_closed(sessions)?;
+        // A crash here leaves unreferenced raw files, never dangling index rows.
+        for id in ids {
             self.remove_raw(id)?;
         }
-        sessions.retain(|s| s.summary.ended_unix_ms.is_none());
-        self.save_closed(&sessions)?;
-        Ok(ids.len())
+        Ok(())
     }
     fn remove_raw(&self, id: &str) -> Result<()> {
         let path = self.path(id)?;
@@ -760,12 +798,9 @@ impl Store {
             .filter(|s| s.summary.ended_unix_ms.is_some_and(|end| end < cutoff))
             .map(|s| s.summary.id.clone())
             .collect::<Vec<_>>();
-        for id in &ids {
-            self.remove_raw(id)?;
-        }
         if !ids.is_empty() {
             sessions.retain(|s| !ids.contains(&s.summary.id));
-            self.save_closed(&sessions)?;
+            self.commit_removal(&sessions, &ids)?;
         }
         Ok(())
     }
@@ -904,7 +939,13 @@ impl Recorder {
         }
         if self.charge.connected == Some(false) {
             self.due_ms = None;
-            let measured = self.measure(h);
+            // Full already recorded its final point before periodic sampling
+            // paused; unplugging later must not append a parked-interval tail.
+            let measured = if old.status == "Full" {
+                Ok(())
+            } else {
+                self.measure(h)
+            };
             self.finish(h, "disconnected")?;
             measured?;
         } else if self.charge.connected.is_none() {
@@ -1250,8 +1291,8 @@ fn open_regular(path: &Path) -> Result<File> {
         .open(path)
         .map_err(|e| e.to_string())
 }
-/// Unlike ownership/config writes, this recoverable index deliberately avoids a
-/// flash sync on every measurement. Complete JSONL rows survive a lost snapshot.
+/// Active measurement snapshots avoid a flash sync every five seconds. Closed
+/// membership uses storage::atomic instead, so deletions survive a lost snapshot.
 fn snapshot_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or("missing_parent")?;
     storage::secure_dir(parent)?;
@@ -1281,6 +1322,45 @@ fn snapshot_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_deleted_raw_does_not_reappear_after_interrupted_cleanup() {
+        let root = std::env::temp_dir().join(format!(
+            "charge-guard-delete-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        let h = Hardware::fixture(root.clone());
+        let mut recorder = Recorder::new(
+            &h,
+            &Config::default(),
+            ChargeState {
+                connected: Some(true),
+                status: "Charging".into(),
+                ..ChargeState::default()
+            },
+        )
+        .unwrap();
+        recorder.finish(&h, "disconnected").unwrap();
+        let store = &recorder.store;
+        let id = store.closed().unwrap()[0].summary.id.clone();
+        let path = store.path(&id).unwrap();
+        let raw = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        // Force raw removal to fail: its index membership must already be gone.
+        assert_eq!(store.delete(&[id]).unwrap_err(), "unsafe_statistics_file");
+        assert!(store.closed().unwrap().is_empty());
+        fs::remove_dir(&path).unwrap();
+        storage::atomic(&path, &raw).unwrap();
+        // The next startup must honor the committed deletion even when another
+        // snapshot is corrupt and forces JSONL recovery before orphan cleanup.
+        storage::atomic(&store.dir.join("active.json"), b"{").unwrap();
+        let recovered = Store::new(&h).unwrap();
+        assert!(recovered.load().unwrap().is_empty());
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn statistics_boottime_gaps_and_signed_average() {

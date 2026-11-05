@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Opt in to the OEM PPS-status current check. No votes, PDOs or limits are changed. */
+/* OEM PPS-status assistance and bounded CPA re-admission. No direct PDO/vote writes. */
 #include <linux/module.h>
 #include <linux/kprobes.h>
 #include <linux/moduleparam.h>
@@ -18,6 +18,7 @@ static unsigned long observations;
 static struct kprobe probes[4];
 
 #include "pps_diagnostics.h"
+#include "pps_recovery.h"
 
 /* Only state_lock holders access the saved pointer. remove/shutdown invalidate it
  * before the OEM driver can free it, and prevent later workers from rebinding. */
@@ -79,18 +80,23 @@ static int set_enabled(const char *value, const struct kernel_param *param)
 {
     unsigned long flags;
     bool next;
+    bool changed = false;
     int ret = 0;
     (void)param;
     if (!value || (value[0] != '0' && value[0] != '1') ||
         (value[1] != '\0' && !(value[1] == '\n' && value[2] == '\0')))
         return -EINVAL;
     next = value[0] == '1';
+    mutex_lock(&rec_lock);
     raw_spin_lock_irqsave(&state_lock, flags);
     if (next && (!ready || retiring)) {
         ret = -ENODEV;
     } else {
         if (enabled != next) {
+            changed = true;
             diag.session_used = false;
+            diag.ever_charging = false;
+            diag.exit_ms = diag.last_reset_ms = diag.last_charging_ms = 0;
             diag_emit(DIAG_ENABLED, 0, next, 0, NULL);
         }
         enabled = next;
@@ -98,6 +104,9 @@ static int set_enabled(const char *value, const struct kernel_param *param)
             restore_locked();
     }
     raw_spin_unlock_irqrestore(&state_lock, flags);
+    if (changed)
+        rec_reset_session(next);
+    mutex_unlock(&rec_lock);
     return ret;
 }
 
@@ -168,6 +177,8 @@ static int __init cg_pps_init(void)
         "oplus_chg_v2:oplus_pps_shutdown",
     };
     int i, ret;
+    /* Optional recovery pins the OEM owner before private symbol resolution. */
+    rec_init();
     for (i = 0; i < ARRAY_SIZE(probes); i++) {
         probes[i].symbol_name = symbols[i];
         probes[i].pre_handler = i < 2 ? assist_pre : retire_pre;
@@ -185,6 +196,7 @@ static int __init cg_pps_init(void)
 undo:
     while (i-- > 0)
         unregister_kprobe(&probes[i]);
+    rec_cleanup();
     return ret;
 }
 
@@ -192,18 +204,22 @@ static void __exit cg_pps_exit(void)
 {
     unsigned long flags;
     int i;
+    mutex_lock(&rec_lock);
     raw_spin_lock_irqsave(&state_lock, flags);
     ready = false;
     enabled = false;
     restore_locked();
     raw_spin_unlock_irqrestore(&state_lock, flags);
+    rec_reset_session(false);
+    mutex_unlock(&rec_lock);
     diag_cleanup();
     for (i = ARRAY_SIZE(probes) - 1; i >= 0; i--)
         unregister_kprobe(&probes[i]);
+    rec_cleanup();
 }
 
 module_init(cg_pps_init);
 module_exit(cg_pps_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ChargeGuard OEM PPS Status current assistance; preserves OEM termination and protection");
-MODULE_VERSION("1");
+MODULE_DESCRIPTION("ChargeGuard OEM PPS assistance and bounded re-admission; preserves OEM protection");
+MODULE_VERSION("2");

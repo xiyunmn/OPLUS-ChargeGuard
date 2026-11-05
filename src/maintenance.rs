@@ -141,7 +141,12 @@ impl Schedule {
                 }
                 matches!(
                     s.id.as_str(),
-                    "omrg" | "migt" | crate::control::ORMS | crate::pps::ID | crate::power::ID
+                    "omrg"
+                        | "migt"
+                        | crate::control::ORMS
+                        | crate::pps::ID
+                        | crate::power::ID
+                        | crate::screen::ID
                 ) && matches!(s.state.as_str(), "unavailable" | "unsupported")
             })
             .map(|s| s.id.clone())
